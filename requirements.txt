@@ -1,0 +1,52 @@
+# FF-KB-Robot 项目依赖 - 最新版本 (2024+)
+# 仅 CLI 模式，不包含 Web API 相关依赖
+
+# Core Dependencies
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# LLM & Embedding - 最新版本
+openai>=2.0.0
+tiktoken>=0.5.0
+langchain-openai>=1.0.2
+
+# Vector Database
+chromadb>=0.4.0
+
+# LangGraph & LangChain - 最新版本 (0.3.x)
+langgraph>=1.0.3
+langchain>=1.0.5
+langchain-core>=1.0.4
+langchain-community>=0.4.1
+
+# Document Processing
+pdf2image>=1.16.0
+PyPDF2>=3.0.0
+python-docx>=0.8.11
+openpyxl>=3.1.0
+
+# Async Support
+aiofiles>=23.2.0
+httpx>=0.24.0
+
+# Utils
+numpy>=1.24.0
+pandas>=1.5.0
+
+# Development
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.0.0
+
+# Logging
+python-json-logger>=2.0.0
+
+langgraph-checkpoint>=2.1.1
+langgraph-prebuilt>=1.0.2
+
+# LangGraph Additional Dependencies
+langgraph-checkpoint>=2.1.1
+langgraph-prebuilt>=1.0.2
