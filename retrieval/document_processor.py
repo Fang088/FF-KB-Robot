@@ -43,9 +43,26 @@ class DocumentProcessor:
         logger.info(f"加载文档: {file_path}")
 
         try:
-            # TODO: 支持多种文件格式（PDF, DOCX, TXT, etc.）
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
+            if file_path.endswith(".txt"):
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            elif file_path.endswith(".docx"):
+                from docx import Document
+                doc = Document(file_path)
+                content = "\n".join([para.text for para in doc.paragraphs])
+            elif file_path.endswith(".pdf"):
+                from PyPDF2 import PdfReader
+                reader = PdfReader(file_path)
+                content = "\n".join([page.extract_text() for page in reader.pages])
+            elif file_path.endswith((".xlsx", ".xls")):
+                import pyexcel
+                data = pyexcel.get_array(file_name=file_path)
+                content = "\n".join(["\t".join(map(str, row)) for row in data])
+            else:
+                # 默认处理为文本文件
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+
             logger.info(f"文档加载成功: {len(content)} 个字符")
             return content
         except Exception as e:
@@ -105,12 +122,13 @@ class DocumentProcessor:
         logger.info(f"分块完成: {len(chunks)} 个分块")
         return chunks
 
-    def process_document(self, file_path: str) -> List[str]:
+    def process_document(self, file_path: str, save_chunks: bool = False) -> List[str]:
         """
         处理文档（加载 -> 清洗 -> 分块）
 
         Args:
             file_path: 文档文件路径
+            save_chunks: 是否保存处理后的分块到processed_chunks目录
 
         Returns:
             文本分块列表
@@ -124,6 +142,28 @@ class DocumentProcessor:
 
             # 分块
             chunks = self.chunk_text(cleaned_content)
+
+            # 保存分块
+            if save_chunks:
+                from config.settings import settings
+                import os
+                import uuid
+
+                # 确保目录存在
+                os.makedirs(settings.PROCESSED_CHUNKS_PATH, exist_ok=True)
+
+                # 生成唯一的文件标识
+                file_id = str(uuid.uuid4())
+                filename = os.path.splitext(os.path.basename(file_path))[0]
+
+                # 保存分块
+                for i, chunk in enumerate(chunks):
+                    chunk_filename = f"{filename}_{file_id}_chunk_{i}.txt"
+                    chunk_path = os.path.join(settings.PROCESSED_CHUNKS_PATH, chunk_filename)
+                    with open(chunk_path, "w", encoding="utf-8") as f:
+                        f.write(chunk)
+
+                logger.info(f"分块已保存到: {settings.PROCESSED_CHUNKS_PATH}")
 
             return chunks
         except Exception as e:

@@ -5,6 +5,7 @@ LLM 服务封装 - 支持 OpenAI, Azure 等多种 LLM 供应商
 from typing import Optional, Any, List, Dict
 from openai import OpenAI, AzureOpenAI
 import logging
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -17,12 +18,12 @@ class LLMService:
 
     def __init__(
         self,
-        provider: str = "openai",
-        api_key: str = "",
+        provider: str = None,
+        api_key: str = None,
         api_base: Optional[str] = None,
-        model_name: str = "gpt-3.5-turbo",
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
+        model_name: str = None,
+        temperature: float = None,
+        max_tokens: int = None,
     ):
         """
         初始化 LLM 服务
@@ -35,15 +36,15 @@ class LLMService:
             temperature: 温度参数，控制随机性
             max_tokens: 最大 token 数
         """
-        self.provider = provider
-        self.api_key = api_key
-        self.api_base = api_base
-        self.model_name = model_name
-        self.temperature = temperature
-        self.max_tokens = max_tokens
+        self.provider = provider or settings.LLM_PROVIDER
+        self.api_key = api_key or settings.LLM_API_KEY
+        self.api_base = api_base or settings.LLM_API_BASE
+        self.model_name = model_name or settings.LLM_MODEL_NAME
+        self.temperature = temperature if temperature is not None else settings.LLM_TEMPERATURE
+        self.max_tokens = max_tokens if max_tokens is not None else settings.LLM_MAX_TOKENS
 
         self.client = self._initialize_client()
-        logger.info(f"LLM 服务已初始化: provider={provider}, model={model_name}")
+        logger.info(f"LLM 服务已初始化: provider={self.provider}, model={self.model_name}")
 
     def _initialize_client(self) -> Any:
         """初始化 LLM 客户端"""

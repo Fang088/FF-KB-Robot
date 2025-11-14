@@ -5,6 +5,7 @@ Embedding 服务封装 - 支持 OpenAI, Azure 等多种供应商
 from typing import Optional, Any, List
 from openai import OpenAI, AzureOpenAI
 import logging
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +18,10 @@ class EmbeddingService:
 
     def __init__(
         self,
-        provider: str = "openai",
-        api_key: str = "",
+        provider: str = None,
+        api_key: str = None,
         api_base: Optional[str] = None,
-        model_name: str = "text-embedding-3-small",
+        model_name: str = None,
     ):
         """
         初始化 Embedding 服务
@@ -31,13 +32,13 @@ class EmbeddingService:
             api_base: API 基础 URL（用于 Azure 或自定义服务）
             model_name: 模型名称
         """
-        self.provider = provider
-        self.api_key = api_key
-        self.api_base = api_base
-        self.model_name = model_name
+        self.provider = provider or settings.EMBEDDING_PROVIDER
+        self.api_key = api_key or settings.EMBEDDING_API_KEY
+        self.api_base = api_base or settings.EMBEDDING_API_BASE
+        self.model_name = model_name or settings.EMBEDDING_MODEL_NAME
 
         self.client = self._initialize_client()
-        logger.info(f"Embedding 服务已初始化: provider={provider}, model={model_name}")
+        logger.info(f"Embedding 服务已初始化: provider={self.provider}, model={self.model_name}")
 
     def _initialize_client(self) -> Any:
         """初始化 Embedding 客户端"""

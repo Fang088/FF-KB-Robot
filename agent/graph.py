@@ -147,8 +147,8 @@ class AgentGraph:
         logger.info(f"开始执行 Agent: query_id={initial_state.query_id}")
 
         try:
-            # 同步执行
-            final_state = compiled.invoke(initial_state)
+            # 异步执行
+            final_state = await compiled.ainvoke(initial_state)
             logger.info(f"Agent 执行完成: query_id={initial_state.query_id}")
             return final_state
         except Exception as e:
@@ -170,8 +170,8 @@ class AgentGraph:
         logger.info(f"开始流式执行 Agent: query_id={initial_state.query_id}")
 
         try:
-            # 流式执行
-            for event in compiled.stream(initial_state):
+            # 异步流式执行
+            async for event in compiled.astream(initial_state):
                 logger.debug(f"流式事件: {event}")
                 yield event
             logger.info(f"Agent 流式执行完成: query_id={initial_state.query_id}")

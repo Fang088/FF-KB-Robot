@@ -84,11 +84,25 @@ class VectorStoreClient:
                 import uuid
                 ids = [str(uuid.uuid4()) for _ in documents]
 
+            # 准备metadata，如果没有提供则添加默认值
+            processed_metadatas = []
+            if metadatas is None:
+                # 每个文档必须有至少一个metadata字段
+                for _ in documents:
+                    processed_metadatas.append({"source": "ff-kb-robot"})
+            else:
+                # 确保每个metadata都是非空字典
+                for meta in metadatas:
+                    if isinstance(meta, dict) and len(meta) > 0:
+                        processed_metadatas.append(meta)
+                    else:
+                        processed_metadatas.append({"source": "ff-kb-robot"})
+
             # 添加文档
             collection.add(
                 documents=documents,
                 embeddings=embeddings,
-                metadatas=metadatas or [{}] * len(documents),
+                metadatas=processed_metadatas,
                 ids=ids,
             )
 
@@ -97,7 +111,6 @@ class VectorStoreClient:
         except Exception as e:
             logger.error(f"添加文档失败: {e}")
             raise
-
     def search(
         self,
         query_embedding: List[float],

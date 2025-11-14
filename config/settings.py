@@ -56,19 +56,21 @@ class Settings(BaseSettings):
     LOG_FILE: str = "./logs/ff_kb_robot.log"
 
     # 临时文件配置
-    TEMP_UPLOAD_PATH: str = "./data/temp_uploads"
-    PROCESSED_CHUNKS_PATH: str = "./data/processed_chunks"
+    TEMP_UPLOAD_PATH: str = "D:\\VsCodePyProject\\LLMAPP\\FF-KB-Robot\\data\\temp_uploads"
+    PROCESSED_CHUNKS_PATH: str = "D:\\VsCodePyProject\\LLMAPP\\FF-KB-Robot\\data\\temp_uploads"
 
     # 检索配置
     TOP_K_RETRIEVAL: int = 5  # 检索 Top K 相关文档
     SIMILARITY_THRESHOLD: float = 0.5
 
     # Pydantic v2 配置方式（新版本推荐）
+    # 明确配置读取项目根目录下的 .env 文件
+    # 使用绝对路径确保无论从哪里运行脚本都能正确找到.env文件
     model_config = ConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=True,
-        extra="ignore"
+        env_file=str(Path(__file__).parent.parent / ".env"),  # 绝对路径指向项目根目录下的.env
+        env_file_encoding="utf-8",  # 配置文件编码：UTF-8
+        case_sensitive=True,  # 配置项区分大小写
+        extra="ignore"  # 忽略配置文件中未定义的配置项
     )
 
     def get_project_root(self) -> Path:
@@ -79,6 +81,6 @@ class Settings(BaseSettings):
         """获取数据库路径"""
         return str(self.PROJECT_ROOT / self.DATABASE_URL.replace("sqlite:///./", ""))
 
-
 # 创建全局配置实例
 settings = Settings()
+

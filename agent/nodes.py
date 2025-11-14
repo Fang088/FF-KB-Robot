@@ -23,18 +23,16 @@ async def retrieve_documents(state: AgentState) -> Dict[str, Any]:
     logger.info(f"执行文档检索: kb_id={state.kb_id}, question={state.question}")
 
     try:
-        # 这里将在后续实现与 KnowledgeBaseManager 的集成
-        # 暂时返回空的检索结果
         state.add_intermediate_step("开始文档检索...")
 
-        # TODO: 调用 KnowledgeBaseManager 进行检索
-        # from retrieval.knowledge_base_manager import KnowledgeBaseManager
-        # kb_manager = KnowledgeBaseManager()
-        # retrieved_docs = kb_manager.search(state.kb_id, state.question, top_k=5)
+        # 调用 KnowledgeBaseManager 进行检索
+        from retrieval.knowledge_base_manager import KnowledgeBaseManager
+        kb_manager = KnowledgeBaseManager()
+        retrieved_docs = kb_manager.search(state.kb_id, state.question, top_k=5)
 
-        state.add_intermediate_step(f"检索完成，获得 {len(state.retrieved_docs)} 个相关文档")
+        state.add_intermediate_step(f"检索完成，获得 {len(retrieved_docs)} 个相关文档")
 
-        return {"retrieved_docs": state.retrieved_docs, "current_node": "retrieve"}
+        return {"retrieved_docs": retrieved_docs, "current_node": "retrieve"}
     except Exception as e:
         logger.error(f"文档检索失败: {e}")
         state.set_error(f"文档检索失败: {e}")

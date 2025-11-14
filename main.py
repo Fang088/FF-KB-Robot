@@ -6,6 +6,7 @@ FF-KB-Robot 主程序入口
 import asyncio
 import argparse
 import logging
+import sqlite3
 from agent.agent_core import AgentCore
 from retrieval.knowledge_base_manager import KnowledgeBaseManager
 from config.settings import settings
@@ -35,33 +36,63 @@ class KBRobotCLI:
         print("\n" + "=" * 70)
         print("" * 15 + "欢迎使用 FF-KB-Robot 知识库机器人")
         print("=" * 70)
-        print("当前配置:")
-        print(f"  - LLM 模型: {settings.LLM_MODEL_NAME}")
-        print(f"  - Embedding 模型: {settings.EMBEDDING_MODEL_NAME}")
-        print(f"  - API 地址: {settings.LLM_API_BASE}")
         print("=" * 70)
 
-        # 首先需要选择或创建知识库
-        kb_id = input("\n请输入知识库 ID（或留空创建新知识库）: ").strip()
+        # 首先需要选择或创建知识库 - 循环直到选择有效
+        kb_id = None
+        while kb_id is None:
+            input_kb_id = input("\n请输入知识库 ID（或留空创建新知识库，输入 'list' 查看所有知识库）: ").strip()
 
-        if not kb_id:
-            # 创建新知识库
-            kb_name = input("请输入知识库名称: ").strip()
-            if not kb_name:
-                print("✗ 知识库名称不能为空")
-                return
+            if input_kb_id.lower() == "list":
+                # 显示所有知识库
+                kbs = self.kb_manager.get_all_kbs()
+                if not kbs:
+                    print("\n✗ 没有找到任何知识库")
+                else:
+                    print("\n" + "-" * 70)
+                    print("所有知识库:")
+                    print("-" * 70)
+                    for i, kb in enumerate(kbs, 1):
+                        print(f"\n  {i}. ID: {kb['id']}")
+                        print(f"     名称: {kb['name']}")
+                        print(f"     文档数: {kb['document_count']}")
+                        print(f"     分块数: {kb['total_chunks']}")
+                        print(f"     创建时间: {kb['created_at']}")
+                        if kb['description']:
+                            print(f"     描述: {kb['description']}")
+                    print("-" * 70)
+                continue  # 继续循环获取输入
 
-            kb_desc = input("请输入知识库描述（可选）: ").strip()
-            kb_info = self.kb_manager.create_knowledge_base(
-                name=kb_name,
-                description=kb_desc if kb_desc else None,
-            )
-            kb_id = kb_info["id"]
-            print(f"✓ 知识库已创建: {kb_id}")
+            if not input_kb_id:
+                # 创建新知识库
+                kb_name = input("请输入知识库名称: ").strip()
+                if not kb_name:
+                    print("✗ 知识库名称不能为空，请重新输入")
+                    continue
+
+                kb_desc = input("请输入知识库描述（可选）: ").strip()
+                try:
+                    kb_info = self.kb_manager.create_knowledge_base(
+                        name=kb_name,
+                        description=kb_desc if kb_desc else None,
+                    )
+                    kb_id = kb_info["id"]
+                    print(f"✓ 知识库已创建: {kb_id}")
+                except Exception as e:
+                    print(f"✗ 创建知识库失败: {e}")
+                    continue
+            else:
+                # 检查知识库 ID 是否存在
+                if self.kb_manager.check_kb_exists(input_kb_id):
+                    kb_id = input_kb_id
+                    print(f"✓ 已选择知识库: {kb_id}")
+                else:
+                    print(f"✗ 知识库 ID '{input_kb_id}' 不存在，请重新输入或创建新的知识库")
 
         # 交互循环
         print("\n" + "-" * 70)
         print("提示: 输入 'exit' 退出, 'upload' 上传文档, 'info' 显示知识库信息")
+        print("      输入 'delete-doc' 删除文档, 'delete-kb' 删除当前知识库")
         print("-" * 70)
 
         while True:
@@ -77,6 +108,7 @@ class KBRobotCLI:
                 break
 
             if question.lower() == "info":
+                # 显示当前知识库信息
                 info = self.agent.get_agent_info()
                 print("\n" + "-" * 70)
                 print("当前 Agent 配置信息:")
@@ -84,12 +116,69 @@ class KBRobotCLI:
                 for key, value in info.items():
                     print(f"  {key}: {value}")
                 print("-" * 70)
+
+                # 显示当前知识库的详细信息
+                kbs = self.kb_manager.get_all_kbs()
+                kb_info = next((kb for kb in kbs if kb['id'] == kb_id), None)
+                if kb_info:
+                    print("\n" + "-" * 70)
+                    print("当前知识库信息:")
+                    print("-" * 70)
+                    print(f"  ID: {kb_info['id']}")
+                    print(f"  名称: {kb_info['name']}")
+                    print(f"  文档数: {kb_info['document_count']}")
+                    print(f"  分块数: {kb_info['total_chunks']}")
+                    print(f"  创建时间: {kb_info['created_at']}")
+                    print(f"  更新时间: {kb_info['updated_at']}")
+                    if kb_info['description']:
+                        print(f"  描述: {kb_info['description']}")
+                    if kb_info['tags']:
+                        print(f"  标签: {', '.join(kb_info['tags'])}")
+                    print("-" * 70)
+
+                    # 显示当前知识库的文档列表
+                    db_path = str(settings.PROJECT_ROOT / settings.DATABASE_URL.replace("sqlite:///./", ""))
+                    conn = sqlite3.connect(db_path)
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute("SELECT id, filename, chunk_count, created_at FROM documents WHERE kb_id = ?", (kb_id,))
+                        documents = cursor.fetchall()
+
+                        if documents:
+                            print("\n" + "-" * 70)
+                            print("知识库中文档:")
+                            print("-" * 70)
+                            for i, doc in enumerate(documents, 1):
+                                print(f"\n  {i}. 文件名: {doc[1]}")
+                                print(f"     ID: {doc[0]}")
+                                print(f"     分块数: {doc[2]}")
+                                print(f"     上传时间: {doc[3]}")
+                            print("-" * 70)
+                    except Exception as e:
+                        logger.error(f"获取文档列表失败: {e}")
+                    finally:
+                        conn.close()
                 continue
 
             if question.lower() == "upload":
                 file_path = input("请输入文档路径: ").strip()
                 if file_path:
                     await self.upload_document(kb_id, file_path)
+                continue
+
+            if question.lower() == "delete-doc":
+                doc_id = input("请输入要删除的文档 ID: ").strip()
+                if doc_id:
+                    await self.delete_document(doc_id)
+                continue
+
+            if question.lower() == "delete-kb":
+                confirm = input(f"确定要删除知识库 '{kb_id}' 吗？此操作不可恢复！(y/N): ").strip().lower()
+                if confirm == 'y':
+                    await self.delete_knowledge_base(kb_id)
+                    # 删除后退出当前循环
+                    print("\n知识库已删除，程序将退出...")
+                    return
                 continue
 
             # 普通查询
@@ -126,6 +215,40 @@ class KBRobotCLI:
             logger.error(f"上传文档失败: {e}")
             print(f"✗ 上传失败: {e}")
 
+    async def delete_knowledge_base(self, kb_id: str):
+        """
+        删除知识库
+
+        Args:
+            kb_id: 知识库 ID
+        """
+        try:
+            print(f"\n⏳ 正在删除知识库: {kb_id}")
+            if self.kb_manager.delete_knowledge_base(kb_id):
+                print(f"✓ 知识库已删除: {kb_id}")
+            else:
+                print(f"✗ 删除知识库失败: 知识库不存在或已被删除")
+        except Exception as e:
+            logger.error(f"删除知识库失败: {e}")
+            print(f"✗ 删除失败: {e}")
+
+    async def delete_document(self, doc_id: str):
+        """
+        删除文档
+
+        Args:
+            doc_id: 文档 ID
+        """
+        try:
+            print(f"\n⏳ 正在删除文档: {doc_id}")
+            if self.kb_manager.delete_document(doc_id):
+                print(f"✓ 文档已删除: {doc_id}")
+            else:
+                print(f"✗ 删除文档失败: 文档不存在或已被删除")
+        except Exception as e:
+            logger.error(f"删除文档失败: {e}")
+            print(f"✗ 删除失败: {e}")
+
     async def query_kb(self, kb_id: str, question: str):
         """
         直接查询知识库
@@ -143,6 +266,7 @@ class KBRobotCLI:
                 use_tools=False,
             )
             self._print_result(result)
+
         except Exception as e:
             logger.error(f"查询失败: {e}")
             print(f"✗ 查询失败: {e}")
@@ -230,6 +354,12 @@ def main():
   # 显示配置信息
   python main.py -config
 
+  # 删除知识库
+  python main.py -delete-kb kb_001
+
+  # 删除文档
+  python main.py -delete-doc doc_001
+
 注意：
   - 所有 API 请求都通过 302.ai API (https://api.302.ai/v1) 进行
   - LLM 模型: gpt-5-nano
@@ -263,6 +393,16 @@ def main():
         action="store_true",
         help="显示配置信息"
     )
+    parser.add_argument(
+        "-delete-kb",
+        type=str,
+        help="删除知识库（指定知识库 ID）"
+    )
+    parser.add_argument(
+        "-delete-doc",
+        type=str,
+        help="删除文档（指定文档 ID）"
+    )
 
     args = parser.parse_args()
 
@@ -271,6 +411,10 @@ def main():
 
         if args.config:
             cli.print_config()
+        elif args.delete_kb:
+            asyncio.run(cli.delete_knowledge_base(args.delete_kb))
+        elif args.delete_doc:
+            asyncio.run(cli.delete_document(args.delete_doc))
         elif args.knowledge_base and args.upload:
             asyncio.run(cli.upload_document(args.knowledge_base, args.upload))
         elif args.knowledge_base and args.query:

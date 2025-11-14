@@ -74,5 +74,4 @@ def get_logger(name: str = "ff_kb_robot") -> logging.Logger:
     return logging.getLogger(name)
 
 
-# 初始化根日志记录器
-setup_logger()
+# 初始化根日志记录器 - 移动到main.py中
