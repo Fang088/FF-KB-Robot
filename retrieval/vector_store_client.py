@@ -156,7 +156,7 @@ class VectorStoreClient:
 
     def delete_document(self, doc_id: str) -> bool:
         """
-        删除文档
+        删除单个文档的向量
 
         Args:
             doc_id: 文档 ID
@@ -172,6 +172,62 @@ class VectorStoreClient:
         except Exception as e:
             logger.error(f"删除文档失败: {e}")
             return False
+
+    def delete_documents_by_metadata(self, metadata_filter: Dict[str, Any]) -> int:
+        """
+        根据元数据条件删除向量
+
+        Args:
+            metadata_filter: 元数据过滤条件（如 {"kb_id": "some-id"}）
+
+        Returns:
+            删除的文档数量
+        """
+        try:
+            collection = self.client.get_collection(name=self.collection_name)
+
+            # Chroma 使用where()方法过滤元数据
+            results = collection.get(where=metadata_filter)
+
+            if results and results.get("ids"):
+                collection.delete(ids=results["ids"])
+                logger.info(f"已删除 {len(results['ids'])} 个文档（基于元数据过滤）")
+                return len(results["ids"])
+
+            logger.info(f"没有找到匹配的文档")
+            return 0
+        except Exception as e:
+            logger.error(f"根据元数据删除文档失败: {e}")
+            raise
+
+    def delete_knowledge_base_vectors(self, kb_id: str) -> int:
+        """
+        删除知识库的所有向量数据
+
+        Args:
+            kb_id: 知识库 ID
+
+        Returns:
+            删除的向量数量
+        """
+        try:
+            collection = self.client.get_collection(name=self.collection_name)
+
+            # 获取属于该知识库的所有向量
+            results = collection.get(where={"kb_id": kb_id})
+
+            if results and results.get("ids"):
+                # 删除这些向量
+                deleted_ids = results["ids"]
+                collection.delete(ids=deleted_ids)
+                logger.info(f"知识库 {kb_id} 的 {len(deleted_ids)} 个向量已删除")
+                return len(deleted_ids)
+
+            logger.info(f"知识库 {kb_id} 中没有找到任何向量")
+            return 0
+        except Exception as e:
+            logger.error(f"删除知识库向量失败: {e}")
+            raise
 
     def clear_collection(self) -> bool:
         """

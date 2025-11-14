@@ -1,1 +1,10 @@
 2025-11-13 18:51:59,074 - ff_kb_robot - INFO - 日志记录器已设置: ff_kb_robot
+2025-11-14 16:04:05,184 - ff_kb_robot - INFO - 日志记录器已设置: ff_kb_robot
+2025-11-14 16:06:31,827 - ff_kb_robot - INFO - 日志记录器已设置: ff_kb_robot
+2025-11-14 16:07:51,019 - ff_kb_robot - INFO - 日志记录器已设置: ff_kb_robot
+2025-11-14 16:09:26,996 - ff_kb_robot - INFO - 日志记录器已设置: ff_kb_robot
+2025-11-14 16:11:46,835 - ff_kb_robot - INFO - 日志记录器已设置: ff_kb_robot
+2025-11-14 16:18:04,032 - ff_kb_robot - INFO - 日志记录器已设置: ff_kb_robot
+2025-11-14 16:18:06,013 - ff_kb_robot - INFO - FF-KB-Robot CLI 已启动
+2025-11-14 16:18:06,014 - ff_kb_robot - INFO - 进入交互模式
+2025-11-14 16:18:06,017 - ff_kb_robot - ERROR - 发生错误: EOF when reading a line

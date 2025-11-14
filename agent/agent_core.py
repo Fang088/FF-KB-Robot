@@ -89,31 +89,89 @@ class AgentCore:
 
             # 格式化响应
             response = {
-                "query_id": final_state.query_id,
-                "kb_id": final_state.kb_id,
-                "question": final_state.question,
-                "answer": final_state.answer or "无法生成答案",
-                "retrieved_docs": [
-                    {
-                        "id": doc.id,
-                        "content": doc.content,
-                        "score": doc.score,
-                        "metadata": doc.metadata,
-                    }
-                    for doc in final_state.retrieved_docs
-                ],
-                "sources": final_state.sources,
-                "confidence": final_state.confidence,
+                "query_id": initial_state.query_id,  # 使用初始状态的 query_id
+                "kb_id": initial_state.kb_id,  # 使用初始状态的 kb_id
+                "question": initial_state.question,  # 使用初始状态的 question
+                "answer": "无法生成答案",
+                "retrieved_docs": [],
+                "sources": [],
+                "confidence": 0.0,
                 "response_time_ms": response_time_ms,
                 "metadata": {
-                    "iterations": final_state.iteration,
-                    "intermediate_steps": final_state.intermediate_steps,
-                    "error": final_state.error,
+                    "iterations": 0,
+                    "intermediate_steps": [],
+                    "error": None,
                 },
             }
 
+            # 尝试从 final_state 中提取其他信息
+            try:
+                # 处理两种情况：final_state 是字典或 AgentState 对象
+                if isinstance(final_state, dict):
+                    # 如果 final_state 是字典
+
+                    response["query_id"] = final_state.get("query_id", initial_state.query_id)
+                    response["kb_id"] = final_state.get("kb_id", initial_state.kb_id)
+                    response["question"] = final_state.get("question", initial_state.question)
+                    response["answer"] = final_state.get("answer", "无法生成答案")
+
+                    # 处理 retrieved_docs
+                    retrieved_docs = final_state.get("retrieved_docs", [])
+                    if retrieved_docs:
+                        docs_list = []
+                        for doc in retrieved_docs:
+                            if hasattr(doc, 'id'):
+                                # 如果是对象
+                                docs_list.append({
+                                    "id": doc.id,
+                                    "content": doc.content,
+                                    "score": doc.score,
+                                    "metadata": doc.metadata,
+                                })
+                            elif isinstance(doc, dict):
+                                # 如果是字典
+                                docs_list.append(doc.copy())
+
+                        response["retrieved_docs"] = docs_list
+
+                    response["sources"] = final_state.get("sources", [])
+                    response["confidence"] = final_state.get("confidence", 0.0)
+
+                    # 处理 metadata
+                    response["metadata"]["iterations"] = final_state.get("iteration", 0)
+                    response["metadata"]["intermediate_steps"] = final_state.get("intermediate_steps", [])
+                    response["metadata"]["error"] = final_state.get("error", None)
+
+                elif hasattr(final_state, '__dict__'):
+
+                    if hasattr(final_state, 'answer') and final_state.answer:
+                        response["answer"] = final_state.answer
+                    if hasattr(final_state, 'retrieved_docs'):
+                        response["retrieved_docs"] = [
+                            {
+                                "id": doc.id,
+                                "content": doc.content,
+                                "score": doc.score,
+                                "metadata": doc.metadata,
+                            }
+                            for doc in final_state.retrieved_docs
+                        ]
+                    if hasattr(final_state, 'sources'):
+                        response["sources"] = final_state.sources
+                    if hasattr(final_state, 'confidence'):
+                        response["confidence"] = final_state.confidence
+                    if hasattr(final_state, 'iteration'):
+                        response["metadata"]["iterations"] = final_state.iteration
+                    if hasattr(final_state, 'intermediate_steps'):
+                        response["metadata"]["intermediate_steps"] = final_state.intermediate_steps
+                    if hasattr(final_state, 'error'):
+                        response["metadata"]["error"] = final_state.error
+
+            except Exception as e:
+                logger.error(f"从 final_state 提取信息失败: {e}")
+
             logger.info(
-                f"查询完成: query_id={final_state.query_id}, "
+                f"查询完成: query_id={initial_state.query_id}, "  # 使用初始状态的 query_id
                 f"time={response_time_ms:.2f}ms"
             )
 

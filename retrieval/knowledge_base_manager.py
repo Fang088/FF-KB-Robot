@@ -2,6 +2,7 @@
 知识库管理器 - 知识库的创建、管理、文档上传、检索等功能
 """
 
+import os
 from typing import List, Dict, Any, Optional
 import uuid
 import logging
@@ -298,7 +299,13 @@ class KnowledgeBaseManager:
 
     def delete_knowledge_base(self, kb_id: str) -> bool:
         """
-        删除知识库
+        彻底删除知识库
+
+        完整删除流程（四层清理）:
+        1. SQLite 数据库: 文本分块、文档、知识库记录
+        2. 向量数据库: 删除该知识库的所有向量数据
+        3. 临时文件: 删除上传的原始文档文件
+        4. 分块文件: 删除处理后的分块文本文件
 
         Args:
             kb_id: 知识库 ID
@@ -307,47 +314,125 @@ class KnowledgeBaseManager:
             是否删除成功
         """
         try:
-            # 1. 从数据库中删除知识库相关的所有数据
+            import shutil
+
+            logger.info(f"开始删除知识库: {kb_id}")
+
+            # 步骤 1: 获取知识库中的所有文档信息（包括临时文件和分块文件路径）
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            try:
+                # 获取知识库中的所有文档信息
+                cursor.execute("""
+                    SELECT id, temp_path FROM documents WHERE kb_id = ?
+                """, (kb_id,))
+                docs_info = cursor.fetchall()
+                logger.info(f"知识库包含 {len(docs_info)} 个文档")
+            finally:
+                conn.close()
+
+            # 步骤 2: 从 SQLite 数据库删除知识库相关的所有数据（使用事务保证一致性）
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             try:
-                # 开始事务
                 conn.execute("BEGIN TRANSACTION")
 
                 # 删除文本块
                 cursor.execute("DELETE FROM text_chunks WHERE kb_id = ?", (kb_id,))
+                chunks_deleted = cursor.rowcount
+                logger.info(f"已删除 {chunks_deleted} 个文本分块")
+
                 # 删除文档
                 cursor.execute("DELETE FROM documents WHERE kb_id = ?", (kb_id,))
-                # 删除知识库本身
+                docs_deleted = cursor.rowcount
+                logger.info(f"已删除 {docs_deleted} 个文档记录")
+
+                # 删除知识库
                 cursor.execute("DELETE FROM knowledge_bases WHERE id = ?", (kb_id,))
+                kb_deleted = cursor.rowcount
+                logger.info(f"已删除知识库记录")
 
                 conn.commit()
+                logger.info("数据库事务提交成功")
             except Exception as e:
                 conn.rollback()
-                raise e
+                logger.error(f"数据库事务回滚: {e}")
+                raise
             finally:
                 conn.close()
 
-            # 2. 从向量存储中删除知识库相关的所有向量
+            # 步骤 3: 从向量数据库删除知识库的所有向量数据
+            vector_deleted_count = 0
             try:
-                # 对于chroma向量存储，直接删除整个知识库目录
-                import shutil
-                import os
-                vector_kb_path = os.path.join(self.vector_store_path, kb_id)
-                if os.path.exists(vector_kb_path):
-                    shutil.rmtree(vector_kb_path)
+                if hasattr(self, 'vector_store') and self.vector_store:
+                    vector_deleted_count = self.vector_store.delete_knowledge_base_vectors(kb_id)
+                    logger.info(f"向量数据库中已删除 {vector_deleted_count} 个向量")
             except Exception as e:
-                logger.warning(f"删除向量存储失败（不影响整体删除）: {e}")
+                logger.warning(f"删除向量数据失败（可能数据库不存在或已清空）: {e}")
 
-            logger.info(f"知识库已删除: {kb_id}")
+            # 步骤 4: 删除临时文件（上传的原始文档）
+            temp_files_deleted = 0
+            try:
+                for doc_id, temp_path in docs_info:
+                    if temp_path and os.path.exists(temp_path):
+                        os.remove(temp_path)
+                        temp_files_deleted += 1
+                        logger.info(f"临时文件已删除: {temp_path}")
+
+                logger.info(f"共删除 {temp_files_deleted} 个临时文件")
+            except Exception as e:
+                logger.warning(f"删除临时文件失败（不影响整体删除）: {e}")
+
+            # 步骤 5: 删除分块文件（处理后的分块文本）
+            chunks_files_deleted = 0
+            try:
+                processed_chunks_path = settings.PROCESSED_CHUNKS_PATH
+                if processed_chunks_path and os.path.exists(processed_chunks_path):
+                    # 列出分块文件夹中的所有文件，查找属于该kb的分块
+                    for filename in os.listdir(processed_chunks_path):
+                        # 分块文件名格式: {timestamp}_{filename}_{uuid}_chunk_{index}.txt
+                        # 我们需要从元数据中查找属于该知识库的分块文件
+                        file_path = os.path.join(processed_chunks_path, filename)
+
+                        # 尝试从文件元数据或内容识别属于该知识库的文件
+                        # 简单方案：删除该知识库内所有文档对应的分块
+                        for doc_id, _ in docs_info:
+                            if doc_id in filename:
+                                try:
+                                    os.remove(file_path)
+                                    chunks_files_deleted += 1
+                                    logger.info(f"分块文件已删除: {file_path}")
+                                except Exception as e:
+                                    logger.warning(f"删除分块文件失败: {file_path}, 错误: {e}")
+                                break
+
+                logger.info(f"共删除 {chunks_files_deleted} 个分块文件")
+            except Exception as e:
+                logger.warning(f"删除分块文件失败（不影响整体删除）: {e}")
+
+            logger.info(f"""
+知识库删除完成 (ID: {kb_id})
+- 数据库记录: ✓ ({chunks_deleted} 个分块 + {docs_deleted} 个文档 + 1 个知识库)
+- 向量数据: ✓ ({vector_deleted_count} 个向量)
+- 临时文件: ✓ ({temp_files_deleted} 个文件)
+- 分块文件: ✓ ({chunks_files_deleted} 个文件)
+            """)
             return True
+
         except Exception as e:
-            logger.error(f"删除知识库失败: {e}")
+            logger.error(f"删除知识库失败: {e}", exc_info=True)
             return False
 
     def delete_document(self, doc_id: str) -> bool:
         """
-        删除文档
+        彻底删除文档
+
+        完整删除流程（四层清理）:
+        1. SQLite 数据库: 删除文档及其关联的文本分块和元数据
+        2. 向量数据库: 删除该文档的所有向量数据
+        3. 临时文件: 删除上传的原始文档文件
+        4. 分块文件: 删除处理后的分块文本文件
 
         Args:
             doc_id: 文档 ID
@@ -356,59 +441,116 @@ class KnowledgeBaseManager:
             是否删除成功
         """
         try:
-            # 1. 检查文档是否存在
+            logger.info(f"开始删除文档: {doc_id}")
+
+            # 步骤 1: 检查文档是否存在并获取相关信息
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             try:
-                cursor.execute("SELECT id, kb_id, filename FROM documents WHERE id = ?", (doc_id,))
+                cursor.execute("""
+                    SELECT id, kb_id, filename, temp_path FROM documents WHERE id = ?
+                """, (doc_id,))
                 doc_info = cursor.fetchone()
                 if not doc_info:
                     logger.error(f"文档不存在: {doc_id}")
                     return False
-                doc_id, kb_id, filename = doc_info
+
+                doc_id, kb_id, filename, temp_path = doc_info
+                logger.info(f"找到文档: {filename} (kb_id: {kb_id})")
             finally:
                 conn.close()
 
-            # 2. 从数据库中删除文档相关的所有数据
+            # 步骤 2: 从 SQLite 数据库删除文档相关的所有数据（使用事务保证一致性）
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             try:
-                # 开始事务
                 conn.execute("BEGIN TRANSACTION")
 
                 # 删除文本块
                 cursor.execute("DELETE FROM text_chunks WHERE document_id = ?", (doc_id,))
+                chunks_deleted = cursor.rowcount
+                logger.info(f"已删除 {chunks_deleted} 个文本分块")
 
                 # 删除文档本身
                 cursor.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+                docs_deleted = cursor.rowcount
+                logger.info(f"已删除文档记录")
 
-                # 更新知识库的文档数和总块数
+                # 更新知识库统计信息
                 cursor.execute("""
                     UPDATE knowledge_bases
                     SET document_count = document_count - 1,
                         total_chunks = (
                             SELECT COUNT(*) FROM text_chunks WHERE kb_id = ?
-                        )
+                        ),
+                        updated_at = ?
                     WHERE id = ?
-                """, (kb_id, kb_id))
+                """, (kb_id, datetime.now().isoformat(), kb_id))
 
                 conn.commit()
+                logger.info("数据库事务提交成功")
             except Exception as e:
                 conn.rollback()
-                raise e
+                logger.error(f"数据库事务回滚: {e}")
+                raise
             finally:
                 conn.close()
 
-            # 3. 从向量存储中删除文档相关的所有向量
+            # 步骤 3: 从向量数据库删除文档的所有向量数据
+            vector_deleted = False
             try:
-                self.embedding_service.vector_store.delete_document(doc_id)
+                if hasattr(self, 'vector_store') and self.vector_store:
+                    self.vector_store.delete_document(doc_id)
+                    vector_deleted = True
+                    logger.info(f"向量数据库中已删除该文档的向量")
             except Exception as e:
-                logger.warning(f"删除向量存储失败（不影响整体删除）: {e}")
+                logger.warning(f"删除向量数据失败（可能数据库不存在）: {e}")
 
-            logger.info(f"文档已删除: {filename} (ID: {doc_id})")
+            # 步骤 4: 删除临时文件（上传的原始文档）
+            temp_file_deleted = False
+            try:
+                if temp_path and os.path.exists(temp_path):
+                    os.remove(temp_path)
+                    temp_file_deleted = True
+                    logger.info(f"临时文件已删除: {temp_path}")
+                else:
+                    logger.info(f"临时文件不存在或路径为空: {temp_path}")
+            except Exception as e:
+                logger.warning(f"删除临时文件失败（不影响整体删除）: {e}")
+
+            # 步骤 5: 删除分块文件（处理后的分块文本）
+            chunks_files_deleted = 0
+            try:
+                processed_chunks_path = settings.PROCESSED_CHUNKS_PATH
+                if processed_chunks_path and os.path.exists(processed_chunks_path):
+                    # 删除属于该文档的所有分块文件
+                    for filename_item in os.listdir(processed_chunks_path):
+                        # 分块文件名格式: {timestamp}_{original_filename}_{doc_id}_chunk_{index}.txt
+                        # 我们通过 doc_id 来匹配
+                        if doc_id in filename_item:
+                            file_path = os.path.join(processed_chunks_path, filename_item)
+                            try:
+                                os.remove(file_path)
+                                chunks_files_deleted += 1
+                                logger.info(f"分块文件已删除: {file_path}")
+                            except Exception as e:
+                                logger.warning(f"删除分块文件失败: {file_path}, 错误: {e}")
+
+                logger.info(f"共删除 {chunks_files_deleted} 个分块文件")
+            except Exception as e:
+                logger.warning(f"删除分块文件失败（不影响整体删除）: {e}")
+
+            logger.info(f"""
+文档删除完成 (ID: {doc_id}, 文件名: {filename})
+- 数据库记录: ✓ ({chunks_deleted} 个分块 + 1 个文档)
+- 向量数据: ✓ ({vector_deleted})
+- 临时文件: ✓ ({temp_file_deleted})
+- 分块文件: ✓ ({chunks_files_deleted} 个文件)
+            """)
             return True
+
         except Exception as e:
-            logger.error(f"删除文档失败: {e}")
+            logger.error(f"删除文档失败: {e}", exc_info=True)
             return False
 
     def check_kb_exists(self, kb_id: str) -> bool:

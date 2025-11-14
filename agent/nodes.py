@@ -27,8 +27,13 @@ async def retrieve_documents(state: AgentState) -> Dict[str, Any]:
 
         # 调用 KnowledgeBaseManager 进行检索
         from retrieval.knowledge_base_manager import KnowledgeBaseManager
+        from .state import RetrievedDoc
+
         kb_manager = KnowledgeBaseManager()
         retrieved_docs = kb_manager.search(state.kb_id, state.question, top_k=5)
+
+        # 将字典转换为 RetrievedDoc 对象
+        retrieved_docs = [RetrievedDoc(**doc) for doc in retrieved_docs]
 
         state.add_intermediate_step(f"检索完成，获得 {len(retrieved_docs)} 个相关文档")
 
@@ -55,27 +60,33 @@ async def generate_response(state: AgentState) -> Dict[str, Any]:
     try:
         state.add_intermediate_step("开始生成答案...")
 
-        # TODO: 使用 LLMService 生成答案
-        # from models.llm_service import LLMService
-        # from config.settings import settings
-        # from prompts.system_prompts import get_rag_system_prompt
+        # 使用 LLMService 生成答案
+        from models.llm_service import LLMService
+        from config.settings import settings
+        from prompts.system_prompts import get_system_prompt
 
-        # llm = LLMService()
-        # context = state.get_context_for_generation()
-        # system_prompt = get_rag_system_prompt()
-        # user_prompt = f"问题: {state.question}\n\n{context}"
-        # answer = llm.generate_text(user_prompt, system_prompt=system_prompt)
-
-        # 暂时返回示例答案
-        answer = f"关于'{state.question}'的答案。"
+        llm = LLMService()
+        context = state.get_context_for_generation()
+        system_prompt = get_system_prompt("rag")
+        user_prompt = f"问题: {state.question}\n\n{context}"
+        answer = llm.generate_text(user_prompt, system_prompt=system_prompt)
         state.answer = answer
 
         # 计算置信度（基于检索文档数量和相关度）
         if state.retrieved_docs:
-            avg_score = sum(doc.score for doc in state.retrieved_docs) / len(
-                state.retrieved_docs
-            )
-            state.confidence = min(avg_score, 0.95)
+            # 同时支持 RetrievedDoc 对象和字典
+            scores = []
+            for doc in state.retrieved_docs:
+                if hasattr(doc, 'score'):
+                    scores.append(doc.score)
+                elif isinstance(doc, dict):
+                    scores.append(doc.get('score', 0.0))
+
+            if scores:
+                avg_score = sum(scores) / len(scores)
+                state.confidence = min(avg_score, 0.95)
+            else:
+                state.confidence = 0.5
         else:
             state.confidence = 0.5
 
@@ -127,7 +138,7 @@ async def process_tool_calls(state: AgentState) -> Dict[str, Any]:
         return {"error": str(e), "current_node": "process_tools"}
 
 
-async def decide_next_step(state: AgentState) -> str:
+async def decide_next_step(state: AgentState) -> Dict[str, Any]:
     """
     决策节点
     根据当前状态决定下一步应该执行的节点
@@ -136,71 +147,33 @@ async def decide_next_step(state: AgentState) -> str:
         state: 当前 Agent 状态
 
     Returns:
-        下一个节点的名称
+        空字典，因为路由决策由 graph.py 中的 _route_decision 函数完成
     """
     logger.info(f"执行决策: iteration={state.iteration}, current_node={state.current_node}")
 
-    # 如果有错误，结束
-    if state.error:
-        return "end"
-
-    # 如果已有答案，结束
-    if state.answer and state.confidence > 0.5:
-        return "end"
-
-    # 如果超过最大迭代次数，结束
-    if state.iteration >= state.max_iterations:
-        logger.warning(f"达到最大迭代次数: {state.max_iterations}")
-        if not state.answer:
-            state.answer = "无法基于提供的信息生成答案。"
-        return "end"
-
-    # 如果还没有检索文档，先检索
-    if not state.retrieved_docs:
-        return "retrieve"
-
-    # 如果没有生成答案，生成答案
-    if not state.answer:
-        return "generate"
-
-    # 如果有待处理的工具调用，处理工具
-    if len(state.tool_calls) > len(state.tool_results):
-        return "process_tools"
-
-    # 默认结束
-    return "end"
+    # 该节点仅作为条件路由的占位符，实际路由决策由 _route_decision 函数完成
+    return {}
 
 
-def format_final_response(state: AgentState) -> Dict[str, Any]:
+async def format_final_response(state: AgentState) -> Dict[str, Any]:
     """
-    格式化最终响应
-
-    Args:
-        state: 最终的 Agent 状态
-
-    Returns:
-        格式化的响应字典
+    格式化最终响应节点
+    返回整个状态的字典表示
     """
-    return {
-        "query_id": state.query_id,
-        "kb_id": state.kb_id,
-        "question": state.question,
-        "answer": state.answer or "无法生成答案",
-        "retrieved_docs": [
-            {
-                "id": doc.id,
-                "content": doc.content,
-                "score": doc.score,
-                "metadata": doc.metadata,
-            }
-            for doc in state.retrieved_docs
-        ],
-        "sources": state.sources,
-        "confidence": state.confidence,
-        "response_time_ms": 0,  # 由调用者计算
-        "metadata": {
-            "iterations": state.iteration,
-            "intermediate_steps": state.intermediate_steps,
-            "error": state.error,
-        },
-    }
+    # 同时支持 AgentState 对象和字典
+    if hasattr(state, 'query_id'):
+        logger.info(f"执行最终响应格式化: query_id={state.query_id}")
+    elif isinstance(state, dict):
+        logger.info(f"执行最终响应格式化: query_id={state.get('query_id', 'unknown')}")
+
+    # 同时支持 AgentState 对象和字典
+    if hasattr(state, 'to_dict'):
+        # 如果是 AgentState 对象
+        return state.to_dict()
+    elif isinstance(state, dict):
+        # 如果是字典
+        return state.copy()
+    else:
+        # 其他类型
+        logger.error(f"不支持的状态类型: {type(state)}")
+        return {}

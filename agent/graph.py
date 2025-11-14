@@ -103,7 +103,7 @@ class AgentGraph:
             return "end"
 
         # 如果还没有检索文档，先检索
-        if not state.retrieved_docs:
+        if not state.retrieved_docs and state.current_node != "retrieve":
             logger.info("未检索文档，进行文档检索")
             return "retrieve"
 

@@ -158,8 +158,21 @@ class AgentState:
         if self.retrieved_docs:
             context_parts.append("检索到的相关文档：\n")
             for i, doc in enumerate(self.retrieved_docs, 1):
+                # 同时支持 RetrievedDoc 对象和字典
+                if hasattr(doc, 'score') and hasattr(doc, 'content'):
+                    # 如果是 RetrievedDoc 对象
+                    score = doc.score
+                    content = doc.content
+                elif isinstance(doc, dict):
+                    # 如果是字典
+                    score = doc.get('score', 0.0)
+                    content = doc.get('content', '')
+                else:
+                    # 其他类型
+                    continue
+
                 context_parts.append(
-                    f"{i}. 相关度: {doc.score:.2f}\n内容: {doc.content}\n"
+                    f"{i}. 相关度: {score:.2f}\n内容: {content}\n"
                 )
 
         if self.tool_results:
