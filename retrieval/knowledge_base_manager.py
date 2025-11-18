@@ -26,8 +26,8 @@ class KnowledgeBaseManager:
     def __init__(self):
         """初始化知识库管理器"""
         self.doc_processor = DocumentProcessor(
-            chunk_size=settings.CHUNK_SIZE,
-            chunk_overlap=settings.CHUNK_OVERLAP,
+            chunk_size=settings.TEXT_CHUNK_SIZE,
+            chunk_overlap=settings.TEXT_CHUNK_OVERLAP,
         )
         self.embedding_service = EmbeddingService(
             provider=settings.EMBEDDING_PROVIDER,
@@ -259,39 +259,76 @@ class KnowledgeBaseManager:
         self,
         kb_id: str,
         query: str,
-        top_k: int = 5,
+        top_k: Optional[int] = None,
+        use_postprocessor: bool = True,
     ) -> List[Dict[str, Any]]:
         """
-        搜索知识库
+        搜索知识库 - 带后处理的改进版
 
         Args:
             kb_id: 知识库 ID
             query: 查询文本
-            top_k: 返回结果数量
+            top_k: 返回结果数量（为 None 则使用 settings 中的配置）
+            use_postprocessor: 是否使用后处理器进行优化
 
         Returns:
             搜索结果
         """
+        # 使用配置的默认值
+        if top_k is None:
+            top_k = settings.RETRIEVAL_TOP_K
+
         try:
-            logger.info(f"搜索知识库: kb_id={kb_id}, query={query}, top_k={top_k}")
+            logger.info(
+                f"搜索知识库: kb_id={kb_id}, query={query}, "
+                f"top_k={top_k}, postprocessor={use_postprocessor}"
+            )
 
             # 生成查询嵌入
             query_embedding = self.embedding_service.embed_text(query)
 
-            # 搜索向量数据库
+            # 搜索向量数据库（获取更多结果用于后处理）
+            # 策略：向量库获取更多结果，然后用后处理器精选
+            retrieval_top_k = max(top_k * settings.RETRIEVAL_FETCH_MULTIPLIER, 15)
+
             results = self.vector_store.search(
                 query_embedding=query_embedding,
-                top_k=top_k,
+                top_k=retrieval_top_k,
             )
 
-            # 过滤结果（只保留相同知识库的文档）
-            filtered_results = [
-                r for r in results
-                if r.get("metadata", {}).get("kb_id") == kb_id
-            ]
+            # 后处理流程
+            if use_postprocessor:
+                from .retrieval_postprocessor import RetrievalPostProcessor
 
-            logger.info(f"搜索完成: 返回 {len(filtered_results)} 个结果")
-            return filtered_results
+                postprocessor = RetrievalPostProcessor(
+                    similarity_threshold=settings.RETRIEVAL_SIMILARITY_THRESHOLD,
+                    dedup_threshold=settings.RETRIEVAL_DEDUP_THRESHOLD,
+                    top_k=top_k,
+                )
+
+                # 后处理：过滤 + 去重 + 重排
+                processed_results = postprocessor.process(
+                    results=results,
+                    kb_id=kb_id,
+                    query=query,
+                )
+
+                logger.info(
+                    f"搜索完成: "
+                    f"原始 {len(results)} 个 → "
+                    f"处理后 {len(processed_results)} 个结果"
+                )
+
+                return processed_results
+            else:
+                # 降级：仅做基本过滤
+                filtered_results = [
+                    r for r in results
+                    if r.get("metadata", {}).get("kb_id") == kb_id
+                ]
+
+                logger.info(f"搜索完成: 返回 {len(filtered_results)} 个结果")
+                return filtered_results[:top_k]
 
         except Exception as e:
             logger.error(f"搜索失败: {e}")

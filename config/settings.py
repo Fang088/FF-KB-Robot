@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     VECTOR_STORE_TYPE: str = "chroma"  # chroma, weaviate, pinecone
     VECTOR_STORE_COLLECTION_NAME: str = "ff_kb_documents"
 
-    # 文档处理配置
+    # 文档处理配置（已移至下方统一管理，保留这些为向后兼容）
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200
     MAX_UPLOAD_SIZE_MB: int = 100
@@ -59,9 +59,46 @@ class Settings(BaseSettings):
     TEMP_UPLOAD_PATH: str = "D:\\VsCodePyProject\\LLMAPP\\FF-KB-Robot\\data\\temp_uploads"
     PROCESSED_CHUNKS_PATH: str = "D:\\VsCodePyProject\\LLMAPP\\FF-KB-Robot\\data\\temp_uploads"
 
-    # 检索配置
-    TOP_K_RETRIEVAL: int = 5  # 检索 Top K 相关文档
-    SIMILARITY_THRESHOLD: float = 0.5
+    # ==================== 检索优化配置 ====================
+    # 相似度过滤阈值（< 此值的结果会被过滤）
+    # 注意：0.3 对于某些嵌入模型可能偏高，导致相关文档被过滤
+    # 实际使用时应根据向量相似度分布调整（建议范围 0.1-0.4）
+    RETRIEVAL_SIMILARITY_THRESHOLD: float = 0.1
+    # 去重阈值（相似度 > 此值认为是重复）
+    RETRIEVAL_DEDUP_THRESHOLD: float = 0.85
+    # 检索返回数量
+    RETRIEVAL_TOP_K: int = 5
+    # 向量库获取数量倍数（top_k * 倍数）
+    # 获取更多候选结果，然后通过后处理器精选
+    RETRIEVAL_FETCH_MULTIPLIER: int = 5
+    # 是否启用检索后处理
+    RETRIEVAL_ENABLE_POSTPROCESSOR: bool = True
+
+    # ==================== 文本分块配置 ====================
+    # 分块大小
+    TEXT_CHUNK_SIZE: int = 1000
+    # 分块重叠
+    TEXT_CHUNK_OVERLAP: int = 200
+    # 最小分块大小
+    TEXT_MIN_CHUNK_SIZE: int = 100
+    # 是否启用智能分块
+    ENABLE_SMART_CHUNK: bool = True
+
+    # ==================== 置信度计算配置 ====================
+    # 最低置信度阈值
+    MIN_CONFIDENCE: float = 0.3
+    # 置信度权重（各维度）
+    CONFIDENCE_W_RETRIEVAL: float = 0.40      # 检索质量
+    CONFIDENCE_W_KEYWORD_MATCH: float = 0.20   # 关键词匹配
+    CONFIDENCE_W_COMPLETENESS: float = 0.15    # 内容完整度
+    CONFIDENCE_W_CONSISTENCY: float = 0.15     # 答案一致性
+    CONFIDENCE_W_ANSWER_QUALITY: float = 0.10  # 答案质量
+
+    # ==================== LLM 生成配置 ====================
+    # 生成最大 tokens
+    GENERATION_MAX_TOKENS: int = 2000
+    # 生成温度
+    GENERATION_TEMPERATURE: float = 0.7
 
     # Pydantic v2 配置方式（新版本推荐）
     # 明确配置读取项目根目录下的 .env 文件

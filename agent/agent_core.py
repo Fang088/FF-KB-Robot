@@ -248,7 +248,7 @@ class AgentCore:
             "llm_model": settings.LLM_MODEL_NAME,
             "embedding_model": settings.EMBEDDING_MODEL_NAME,
             "vector_store": settings.VECTOR_STORE_TYPE,
-            "chunk_size": settings.CHUNK_SIZE,
+            "chunk_size": settings.TEXT_CHUNK_SIZE,
             "max_iterations": settings.LANGGRAPH_MAX_ITERATIONS,
             "timeout": settings.LANGGRAPH_TIMEOUT,
         }
