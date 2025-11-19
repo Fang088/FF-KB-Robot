@@ -13,6 +13,7 @@ from .document_processor import DocumentProcessor
 from .vector_store_client import VectorStoreClient
 from models.embedding_service import EmbeddingService
 from config.settings import settings
+from utils.cache_manager import get_cache_manager
 
 logger = logging.getLogger(__name__)
 
@@ -261,15 +262,22 @@ class KnowledgeBaseManager:
         query: str,
         top_k: Optional[int] = None,
         use_postprocessor: bool = True,
+        use_cache: bool = True,
     ) -> List[Dict[str, Any]]:
         """
-        搜索知识库 - 带后处理的改进版
+        搜索知识库 - 带后处理和多层缓存的改进版
+
+        缓存策略：
+        1. 检索分类缓存（L3）- 问题分类结果（7天 TTL）
+        2. Embedding 缓存（L1）- 查询文本的 embedding（24小时 TTL）
+        3. 向量搜索结果缓存（可选）
 
         Args:
             kb_id: 知识库 ID
             query: 查询文本
             top_k: 返回结果数量（为 None 则使用 settings 中的配置）
             use_postprocessor: 是否使用后处理器进行优化
+            use_cache: 是否使用缓存
 
         Returns:
             搜索结果
@@ -280,11 +288,31 @@ class KnowledgeBaseManager:
 
         try:
             logger.info(
-                f"搜索知识库: kb_id={kb_id}, query={query}, "
-                f"top_k={top_k}, postprocessor={use_postprocessor}"
+                f"搜索知识库: kb_id={kb_id}, query={query[:50]}..., "
+                f"top_k={top_k}, postprocessor={use_postprocessor}, "
+                f"cache={'enabled' if use_cache else 'disabled'}"
             )
 
-            # 生成查询嵌入
+            # 缓存管理器
+            cache_manager = get_cache_manager() if use_cache else None
+
+            # 步骤 1: 检查检索分类缓存（L3）- 低频更新的分类信息
+            retrieval_classification = None
+            if use_cache and cache_manager:
+                retrieval_classification = cache_manager.classifier_cache.get_classification(query)
+                if retrieval_classification:
+                    logger.debug(f"检索分类缓存命中: {retrieval_classification.get('type')}")
+
+            # 如果分类缓存未命中，进行分类（这里简化，实际可调用 RAG 优化器）
+            if not retrieval_classification:
+                retrieval_classification = {
+                    "type": self._classify_query(query),
+                    "timestamp": datetime.now().isoformat(),
+                }
+                if use_cache and cache_manager:
+                    cache_manager.classifier_cache.set_classification(query, retrieval_classification)
+
+            # 步骤 2: 生成查询嵌入（会自动使用 L1 缓存）
             query_embedding = self.embedding_service.embed_text(query)
 
             # 搜索向量数据库（获取更多结果用于后处理）
@@ -316,7 +344,9 @@ class KnowledgeBaseManager:
                 logger.info(
                     f"搜索完成: "
                     f"原始 {len(results)} 个 → "
-                    f"处理后 {len(processed_results)} 个结果"
+                    f"处理后 {len(processed_results)} 个结果 "
+                    f"(classification={retrieval_classification.get('type')}, "
+                    f"cache={'hit' if retrieval_classification.get('from_cache') else 'miss'})"
                 )
 
                 return processed_results
@@ -333,6 +363,35 @@ class KnowledgeBaseManager:
         except Exception as e:
             logger.error(f"搜索失败: {e}")
             raise
+
+    def _classify_query(self, query: str) -> str:
+        """
+        简单的查询分类 - 根据问题关键词进行分类
+        可以扩展为更复杂的分类逻辑（如调用 LLM）
+
+        Returns:
+            分类类型 (factual, explanation, procedural, etc.)
+        """
+        query_lower = query.lower()
+
+        # 事实性问题
+        if any(keyword in query_lower for keyword in ['什么是', '什么', '定义', 'what is', 'definition']):
+            return "factual"
+
+        # 解释性问题
+        if any(keyword in query_lower for keyword in ['为什么', '如何', '怎样', 'why', 'how', 'explain']):
+            return "explanatory"
+
+        # 操作性问题
+        if any(keyword in query_lower for keyword in ['步骤', '步骤', '教程', 'step', 'guide', 'tutorial']):
+            return "procedural"
+
+        # 对比性问题
+        if any(keyword in query_lower for keyword in ['vs', '对比', '区别', 'difference', 'compare', 'vs']):
+            return "comparative"
+
+        # 默认分类
+        return "general"
 
     def delete_knowledge_base(self, kb_id: str) -> bool:
         """

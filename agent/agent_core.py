@@ -1,8 +1,9 @@
 """
 Agent 核心逻辑 - 协调 LLM、Embedding 和检索模块
+支持多层缓存：查询结果缓存、检索分类缓存、Embedding 缓存、语义化缓存
 """
 
-from typing import Optional, Dict, Any, AsyncGenerator
+from typing import Optional, Dict, Any, AsyncGenerator, List
 from datetime import datetime
 import uuid
 import logging
@@ -10,6 +11,7 @@ from .state import AgentState
 from .graph import create_agent_graph
 from config.settings import settings
 import time
+from utils.cache_manager import get_cache_manager
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +20,23 @@ class AgentCore:
     """
     Agent 核心类
     协调 LLM、Embedding、检索等模块，提供统一的 Agent 接口
+    支持多层缓存优化查询性能
     """
 
-    def __init__(self):
-        """初始化 Agent 核心"""
+    def __init__(self, enable_cache: bool = True):
+        """
+        初始化 Agent 核心
+
+        Args:
+            enable_cache: 是否启用缓存（包括语义化缓存）
+        """
         self.agent_graph = create_agent_graph()
-        logger.info("Agent 核心已初始化")
+        self.enable_cache = enable_cache
+        self.cache_manager = get_cache_manager() if enable_cache else None
+
+        logger.info(
+            f"Agent 核心已初始化 (cache={'enabled' if enable_cache else 'disabled'})"
+        )
 
     def _create_initial_state(
         self,
@@ -58,26 +71,53 @@ class AgentCore:
         question: str,
         top_k: int = 5,
         use_tools: bool = False,
+        use_cache: bool = True,
     ) -> Dict[str, Any]:
         """
-        执行查询
+        执行查询（支持多层缓存）
+
+        缓存策略：
+        1. 首先检查查询结果缓存（L2）- 完整查询结果
+        2. 如果缓存命中，直接返回
+        3. 否则执行完整的 Agent 工作流
+        4. Embedding 和分类会自动使用 L1 和 L3 缓存
 
         Args:
             kb_id: 知识库 ID
             question: 用户问题
             top_k: 检索结果数量
             use_tools: 是否使用工具
+            use_cache: 是否使用缓存
 
         Returns:
             查询结果
         """
         logger.info(
-            f"执行查询: kb_id={kb_id}, question={question}, top_k={top_k}"
+            f"执行查询: kb_id={kb_id}, question={question}, top_k={top_k}, "
+            f"cache={'enabled' if (use_cache and self.enable_cache) else 'disabled'}"
         )
 
         start_time = time.time()
 
         try:
+            # 检查查询结果缓存（支持语义匹配）
+            if use_cache and self.enable_cache and self.cache_manager:
+                try:
+                    # 查询缓存（自动支持语义匹配）
+                    cached_result = self.cache_manager.query_cache.get_result(kb_id, question)
+                    if cached_result is not None:
+                        response_time_ms = (time.time() - start_time) * 1000
+                        cached_result["response_time_ms"] = response_time_ms
+                        cached_result["from_cache"] = True
+                        logger.info(
+                            f"缓存命中 (query_id={cached_result.get('query_id')}, "
+                            f"time={response_time_ms:.2f}ms)"
+                        )
+                        return cached_result
+
+                except Exception as e:
+                    logger.warning(f"缓存查询失败（继续执行）: {e}")
+
             # 创建初始状态
             initial_state = self._create_initial_state(kb_id, question, top_k)
 
@@ -89,14 +129,15 @@ class AgentCore:
 
             # 格式化响应
             response = {
-                "query_id": initial_state.query_id,  # 使用初始状态的 query_id
-                "kb_id": initial_state.kb_id,  # 使用初始状态的 kb_id
-                "question": initial_state.question,  # 使用初始状态的 question
+                "query_id": initial_state.query_id,
+                "kb_id": initial_state.kb_id,
+                "question": initial_state.question,
                 "answer": "无法生成答案",
                 "retrieved_docs": [],
                 "sources": [],
                 "confidence": 0.0,
                 "response_time_ms": response_time_ms,
+                "from_cache": False,
                 "metadata": {
                     "iterations": 0,
                     "intermediate_steps": [],
@@ -170,8 +211,17 @@ class AgentCore:
             except Exception as e:
                 logger.error(f"从 final_state 提取信息失败: {e}")
 
+            # 缓存查询结果（支持语义匹配）
+            if use_cache and self.enable_cache and self.cache_manager:
+                try:
+                    cache_result = response.copy()
+                    # 保存到缓存（自动支持语义匹配）
+                    self.cache_manager.query_cache.set_result(kb_id, question, cache_result)
+                except Exception as e:
+                    logger.warning(f"缓存保存失败（不影响主流程）: {e}")
+
             logger.info(
-                f"查询完成: query_id={initial_state.query_id}, "  # 使用初始状态的 query_id
+                f"查询完成: query_id={initial_state.query_id}, "
                 f"time={response_time_ms:.2f}ms"
             )
 
@@ -186,6 +236,7 @@ class AgentCore:
                 "answer": f"查询执行失败: {e}",
                 "error": str(e),
                 "response_time_ms": (time.time() - start_time) * 1000,
+                "from_cache": False,
             }
 
     async def stream_query(
