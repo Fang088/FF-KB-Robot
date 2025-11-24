@@ -107,15 +107,17 @@ class LLMService:
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        on_chunk: Optional[callable] = None,
     ):
         """
-        流式生成文本
+        流式生成文本 - 支持回调和性能追踪
 
         Args:
             prompt: 用户提示
             system_prompt: 系统提示
             temperature: 温度参数（可选，覆盖默认值）
             max_tokens: 最大 token 数（可选，覆盖默认值）
+            on_chunk: 回调函数，接收每个文本片段
 
         Yields:
             生成的文本片段
@@ -138,9 +140,59 @@ class LLMService:
             )
             for chunk in stream:
                 if chunk.choices[0].delta.content:
-                    yield chunk.choices[0].delta.content
+                    content = chunk.choices[0].delta.content
+                    if on_chunk:
+                        on_chunk(content)
+                    yield content
         except Exception as e:
             logger.error(f"LLM 流式生成文本失败: {e}")
+            raise
+
+    async def generate_text_stream_async(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        on_chunk: Optional[callable] = None,
+    ):
+        """
+        异步流式生成文本
+
+        Args:
+            prompt: 用户提示
+            system_prompt: 系统提示
+            temperature: 温度参数
+            max_tokens: 最大 token 数
+            on_chunk: 回调函数
+
+        Yields:
+            生成的文本片段
+        """
+        temperature = temperature if temperature is not None else self.temperature
+        max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            stream = await self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=True,
+            )
+            async for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    if on_chunk:
+                        on_chunk(content)
+                    yield content
+        except Exception as e:
+            logger.error(f"LLM 异步流式生成文本失败: {e}")
             raise
 
     def count_tokens(self, text: str) -> int:

@@ -292,7 +292,7 @@ def main():
     print("  ✗ SQLite 数据库中的所有知识库")
     print("  ✗ SQLite 数据库中的所有文档")
     print("  ✗ SQLite 数据库中的所有文本分块")
-    print("  ✗ Chroma 向量数据库中的所有向量")
+    print("  ✗ HNSW 向量数据库中的所有向量")
     print("  ✗ data/temp_uploads 中的所有临时文件")
     print("  ✗ data/processed_chunks 中的所有分块文件")
     print("\n此操作无法撤销！")

@@ -11,8 +11,8 @@ openai>=2.0.0
 tiktoken>=0.5.0
 langchain-openai>=1.0.2
 
-# Vector Database
-chromadb>=0.4.0
+# Vector Database - 仅 HNSW
+hnswlib>=0.8.0
 
 # LangGraph & LangChain - 最新版本 (0.3.x)
 langgraph>=1.0.3

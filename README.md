@@ -14,7 +14,7 @@ FF-KB-Robot 是一个专注数据报告分析问答的知识库机器人，采�
 ## 🎯 核心特性
 
 - **智能问答**：基于 RAG 的智能问答系统
-- **向量存储**：集成 ChromaDB 进行向量数据存储和相似度检索
+- **高效向量存储**：使用 HNSW（Hierarchical Navigable Small World）进行高效向量存储和检索
 - **统一 API**：所有 API 请求通过 302.ai 进行
 - **灵活工作流**：使用 LangGraph 构建可控的 Agent 工作流
 - **自定义工具**：支持集成自定义工具
@@ -129,7 +129,7 @@ FF-KB-Robot/
 
 - [LangGraph 文档](https://langchain-ai.github.io/langgraph/)
 - [Pydantic 文档](https://docs.pydantic.dev/)
-- [ChromaDB 文档](https://docs.trychroma.com/)
+- [HNSW 文档](https://github.com/nmslib/hnswlib)
 - [302.ai](https://www.302.ai/)
 
 ---

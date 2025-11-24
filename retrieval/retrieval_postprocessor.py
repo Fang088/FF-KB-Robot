@@ -91,9 +91,9 @@ class RetrievalPostProcessor:
         if query:
             reranked = self._rerank_by_query(deduped, query)
         else:
-            # 如果没有查询，就按原始相似度排序
+            # 如果没有查询，就按原始相似度排序（距离越小越好，升序排列）
             reranked = sorted(
-                deduped, key=lambda x: x['score'], reverse=True
+                deduped, key=lambda x: x['score'], reverse=False
             )
 
         # 步骤4：返回前 top_k 个
@@ -110,6 +110,13 @@ class RetrievalPostProcessor:
         """
         过滤结果：只保留指定 kb_id 且相似度足够的结果
 
+        注意：score 是距离值（越小越相似）
+        对于 L2 距离：
+        - 距离=0: 完全相同
+        - 距离<1: 很相似
+        - 距离1-3: 相似
+        - 距离>3: 不相似
+
         Args:
             results: 原始结果
             kb_id: 知识库 ID
@@ -118,22 +125,33 @@ class RetrievalPostProcessor:
             过滤后的结果
         """
         filtered = []
+        kb_mismatch_count = 0
+        score_filtered_count = 0
 
         for result in results:
             # 检查 kb_id 匹配
             result_kb_id = result.get('metadata', {}).get('kb_id')
             if result_kb_id != kb_id:
+                kb_mismatch_count += 1
                 continue
 
-            # 检查相似度
-            score = result.get('score', 0)
-            if score < self.similarity_threshold:
+            # 检查距离（score 是距离，越小越相似）
+            # 过滤掉距离太大的结果（距离 > threshold 表示不相似）
+            score = result.get('score', float('inf'))
+            if score > self.similarity_threshold:
+                score_filtered_count += 1
                 logger.debug(
-                    f"Filtering out result with low score: {score:.3f}"
+                    f"Filtering out result with large distance: {score:.3f} "
+                    f"(threshold: {self.similarity_threshold})"
                 )
                 continue
 
             filtered.append(result)
+
+        if kb_mismatch_count > 0:
+            logger.debug(f"Filtered {kb_mismatch_count} results due to kb_id mismatch")
+        if score_filtered_count > 0:
+            logger.debug(f"Filtered {score_filtered_count} results due to distance threshold")
 
         return filtered
 
@@ -173,8 +191,8 @@ class RetrievalPostProcessor:
         for content_hash, group in content_groups.items():
             if len(group) > 1:
                 # 这组有重复
-                # 按相似度排序，保留最高分的
-                best = max(group, key=lambda x: x.get('score', 0))
+                # 按距离排序，保留最小距离的（最相似的）
+                best = min(group, key=lambda x: x.get('score', float('inf')))
                 deduped.append(best)
                 duplicate_count += len(group) - 1
             else:
@@ -210,11 +228,24 @@ class RetrievalPostProcessor:
 
         scored_results = []
 
+        # 先计算距离的统计信息，用于标准化
+        distances = [r.get('score', float('inf')) for r in results]
+        min_distance = min(distances) if distances else 0
+        max_distance = max(distances) if distances else 1.0
+        distance_range = max_distance - min_distance if max_distance > min_distance else 1.0
+
         for result in results:
             content = result.get('content', '')
 
-            # 维度1：向量相似度（保留原始分数）
-            vector_score = result.get('score', 0)
+            # 维度1：向量相似度（距离转相似度标准化）
+            # 注意：score 是距离值，越小越相似
+            distance = result.get('score', float('inf'))
+            if distance == float('inf'):
+                vector_score = 0.0
+            else:
+                # 标准化距离到 0-1 范围（越小越好，反向转换）
+                normalized_distance = (distance - min_distance) / distance_range if distance_range > 0 else 0
+                vector_score = 1.0 - normalized_distance  # 反向：距离越小，分数越高
 
             # 维度2：关键词匹配度
             keyword_score = self._compute_keyword_match_score(

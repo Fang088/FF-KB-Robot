@@ -12,6 +12,7 @@ from .graph import create_agent_graph
 from config.settings import settings
 import time
 from utils.cache_manager import get_cache_manager
+from utils.performance_tracker import PerformanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -74,13 +75,7 @@ class AgentCore:
         use_cache: bool = True,
     ) -> Dict[str, Any]:
         """
-        执行查询（支持多层缓存）
-
-        缓存策略：
-        1. 首先检查查询结果缓存（L2）- 完整查询结果
-        2. 如果缓存命中，直接返回
-        3. 否则执行完整的 Agent 工作流
-        4. Embedding 和分类会自动使用 L1 和 L3 缓存
+        执行查询（支持多层缓存和性能追踪）
 
         Args:
             kb_id: 知识库 ID
@@ -92,10 +87,9 @@ class AgentCore:
         Returns:
             查询结果
         """
-        logger.info(
-            f"执行查询: kb_id={kb_id}, question={question}, top_k={top_k}, "
-            f"cache={'enabled' if (use_cache and self.enable_cache) else 'disabled'}"
-        )
+        query_id = str(uuid.uuid4())
+        logger.info(f"[{query_id}] 🚀 开始执行查询: kb_id={kb_id}, question={question}")
+        print(f"\n📋 提交问题: {question}")
 
         start_time = time.time()
 
@@ -103,23 +97,24 @@ class AgentCore:
             # 检查查询结果缓存（支持语义匹配）
             if use_cache and self.enable_cache and self.cache_manager:
                 try:
-                    # 查询缓存（自动支持语义匹配）
                     cached_result = self.cache_manager.query_cache.get_result(kb_id, question)
                     if cached_result is not None:
                         response_time_ms = (time.time() - start_time) * 1000
                         cached_result["response_time_ms"] = response_time_ms
                         cached_result["from_cache"] = True
-                        logger.info(
-                            f"缓存命中 (query_id={cached_result.get('query_id')}, "
-                            f"time={response_time_ms:.2f}ms)"
-                        )
+                        logger.info(f"[{query_id}] ⚡ 缓存命中 ({response_time_ms:.2f}ms)")
+                        print(f"⚡ 缓存命中 ({response_time_ms:.0f}ms)")
                         return cached_result
 
                 except Exception as e:
-                    logger.warning(f"缓存查询失败（继续执行）: {e}")
+                    logger.warning(f"[{query_id}] 缓存查询失败（继续执行）: {e}")
+
+            # 创建性能追踪器
+            tracker = PerformanceTracker(query_id)
 
             # 创建初始状态
             initial_state = self._create_initial_state(kb_id, question, top_k)
+            initial_state.query_id = query_id  # 更新 query_id
 
             # 执行 Agent 图
             final_state = await self.agent_graph.execute(initial_state)
@@ -129,7 +124,7 @@ class AgentCore:
 
             # 格式化响应
             response = {
-                "query_id": initial_state.query_id,
+                "query_id": query_id,
                 "kb_id": initial_state.kb_id,
                 "question": initial_state.question,
                 "answer": "无法生成答案",
@@ -151,7 +146,7 @@ class AgentCore:
                 if isinstance(final_state, dict):
                     # 如果 final_state 是字典
 
-                    response["query_id"] = final_state.get("query_id", initial_state.query_id)
+                    response["query_id"] = final_state.get("query_id", query_id)
                     response["kb_id"] = final_state.get("kb_id", initial_state.kb_id)
                     response["question"] = final_state.get("question", initial_state.question)
                     response["answer"] = final_state.get("answer", "无法生成答案")
@@ -220,22 +215,22 @@ class AgentCore:
                 except Exception as e:
                     logger.warning(f"缓存保存失败（不影响主流程）: {e}")
 
-            logger.info(
-                f"查询完成: query_id={initial_state.query_id}, "
-                f"time={response_time_ms:.2f}ms"
-            )
+            logger.info(f"[{query_id}] ✅ 查询完成, 总耗时 {response_time_ms:.2f}ms")
+            print(f"✅ 完成 ({response_time_ms:.0f}ms)")
 
             return response
 
         except Exception as e:
-            logger.error(f"查询执行失败: {e}")
+            elapsed = (time.time() - start_time) * 1000
+            logger.error(f"[{query_id}] ❌ 查询执行失败 ({elapsed:.2f}ms): {e}", exc_info=True)
+            print(f"❌ 错误: {e}")
             return {
-                "query_id": str(uuid.uuid4()),
+                "query_id": query_id,
                 "kb_id": kb_id,
                 "question": question,
                 "answer": f"查询执行失败: {e}",
                 "error": str(e),
-                "response_time_ms": (time.time() - start_time) * 1000,
+                "response_time_ms": elapsed,
                 "from_cache": False,
             }
 

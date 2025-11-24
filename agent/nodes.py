@@ -1,18 +1,19 @@
 """
-LangGraph 节点函数 - 定义 Agent 工作流中的各个节点
+LangGraph 节点函数 - 定义 Agent 工作流中的各个节点（已集成性能埋点）
 """
 
 from typing import Optional, Dict, Any
 from .state import AgentState, RetrievedDoc
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
 
 async def retrieve_documents(state: AgentState) -> Dict[str, Any]:
     """
-    文档检索节点 - 优化版本
-    从知识库中检索与问题相关的文档（集成检索后处理）
+    文档检索节点 - 已集成性能埋点
+    从知识库中检索与问题相关的文档
 
     Args:
         state: 当前 Agent 状态
@@ -20,35 +21,30 @@ async def retrieve_documents(state: AgentState) -> Dict[str, Any]:
     Returns:
         更新后的状态字典
     """
-    logger.info(f"执行文档检索: kb_id={state.kb_id}, question={state.question}")
+    retrieval_start = time.time()
+    logger.info(f"[{state.query_id}] ⏳ 开始检索文档: kb_id={state.kb_id}")
+    print(f"\n⏳ 【检索文档】正在搜索知识库...", end="", flush=True)
 
     try:
-        state.add_intermediate_step("开始文档检索...")
-
         # 调用 KnowledgeBaseManager 进行检索
         from retrieval.knowledge_base_manager import KnowledgeBaseManager
         from .state import RetrievedDoc
 
         kb_manager = KnowledgeBaseManager()
 
-        # 检索文档（已内置后处理功能）
+        # 执行检索
+        search_start = time.time()
         retrieved_docs = kb_manager.search(
             kb_id=state.kb_id,
             query=state.question,
             top_k=5,
-            use_postprocessor=True,  # 启用后处理（去重、重排等）
+            use_postprocessor=True,
         )
+        search_elapsed = (time.time() - search_start) * 1000
 
-        # 调试日志：记录检索结果
-        logger.info(f"向量库返回 {len(retrieved_docs)} 个文档")
-        for i, doc in enumerate(retrieved_docs):
-            score = doc.get('score', 0) if isinstance(doc, dict) else getattr(doc, 'score', 0)
-            content = doc.get('content', '') if isinstance(doc, dict) else getattr(doc, 'content', '')
-            logger.debug(f"  文档{i+1}: score={score:.3f}, content_len={len(content)}, "
-                        f"content_preview='{content[:80]}...'")
+        logger.info(f"[{state.query_id}] 向量库返回 {len(retrieved_docs)} 个文档 ({search_elapsed:.2f}ms)")
 
-        # 将字典转换为 RetrievedDoc 对象
-        # 只保留 RetrievedDoc 需要的字段，过滤掉额外的字段（如 combined_score）
+        # 转换为 RetrievedDoc 对象
         retrieved_docs = [
             RetrievedDoc(
                 id=doc.get('id', ''),
@@ -59,23 +55,25 @@ async def retrieve_documents(state: AgentState) -> Dict[str, Any]:
             for doc in retrieved_docs
         ]
 
-        logger.info(f"转换后获得 {len(retrieved_docs)} 个 RetrievedDoc 对象")
+        retrieval_elapsed = (time.time() - retrieval_start) * 1000
+        print(f" ✅ ({retrieval_elapsed:.0f}ms)")
+        logger.info(f"[{state.query_id}] ✅ 检索完成: {len(retrieved_docs)} 个文档, 耗时 {retrieval_elapsed:.2f}ms")
 
-        state.add_intermediate_step(
-            f"检索完成，获得 {len(retrieved_docs)} 个相关文档"
-        )
+        state.add_intermediate_step(f"检索完成 ({retrieval_elapsed:.0f}ms): {len(retrieved_docs)} 个文档")
 
         return {"retrieved_docs": retrieved_docs, "current_node": "retrieve"}
     except Exception as e:
-        logger.error(f"文档检索失败: {e}", exc_info=True)
+        retrieval_elapsed = (time.time() - retrieval_start) * 1000
+        print(f" ❌")
+        logger.error(f"[{state.query_id}] ❌ 检索失败 ({retrieval_elapsed:.2f}ms): {e}", exc_info=True)
         state.set_error(f"文档检索失败: {e}")
         return {"error": str(e), "current_node": "retrieve"}
 
 
 async def generate_response(state: AgentState) -> Dict[str, Any]:
     """
-    响应生成节点 - 优化版本
-    基于检索到的文档和用户问题生成答案（集成提示词工程和多维度置信度计算）
+    响应生成节点 - 已集成性能埋点和流式输出
+    基于检索到的文档和用户问题生成答案
 
     Args:
         state: 当前 Agent 状态
@@ -83,11 +81,11 @@ async def generate_response(state: AgentState) -> Dict[str, Any]:
     Returns:
         更新后的状态字典
     """
-    logger.info(f"执行响应生成: question={state.question}")
+    generate_start = time.time()
+    logger.info(f"[{state.query_id}] ⏳ 开始生成答案")
+    print(f"\n⏳ 【生成答案】", end="", flush=True)
 
     try:
-        state.add_intermediate_step("开始生成答案...")
-
         # 导入必要的模块
         from models.llm_service import LLMService
         from rag.rag_optimizer import (
@@ -96,12 +94,13 @@ async def generate_response(state: AgentState) -> Dict[str, Any]:
             classify_question,
         )
 
-        # 步骤1：问题分类
+        # 步骤1：问题分类（快速）
+        classify_start = time.time()
         question_type = classify_question(state.question)
-        state.add_intermediate_step(f"问题类型识别: {question_type.value}")
+        classify_elapsed = (time.time() - classify_start) * 1000
+        logger.debug(f"[{state.query_id}] 问题分类完成 ({classify_elapsed:.2f}ms): {question_type.value}")
 
         # 步骤2：构建优化的提示词
-        # 将 RetrievedDoc 对象转换为字典格式（便于处理）
         docs_dict = []
         for doc in state.retrieved_docs:
             if hasattr(doc, 'to_dict'):
@@ -109,48 +108,39 @@ async def generate_response(state: AgentState) -> Dict[str, Any]:
             else:
                 docs_dict.append(doc)
 
-        # 调试日志：检查检索结果
-        logger.info(
-            f"检索结果统计: 总数={len(docs_dict)}, "
-            f"问题='{state.question}', "
-            f"问题类型={question_type.value}"
-        )
-        for i, doc in enumerate(docs_dict):
-            score = doc.get('score', 0) if isinstance(doc, dict) else getattr(doc, 'score', 0)
-            content_preview = doc.get('content', '')[:100] if isinstance(doc, dict) else getattr(doc, 'content', '')[:100]
-            logger.debug(f"  文档{i+1}: score={score:.3f}, content_preview='{content_preview}...'")
-
-        # 使用专业的提示词模板
+        prompt_start = time.time()
         prompts = PromptTemplate.format_rag_prompt(
             question=state.question,
             documents=docs_dict,
             question_type=question_type,
         )
+        prompt_elapsed = (time.time() - prompt_start) * 1000
+        logger.debug(f"[{state.query_id}] 提示词生成完成 ({prompt_elapsed:.2f}ms), 长度: {len(prompts['user'])} 字符")
 
-        # 调试日志：记录生成的提示词
-        logger.debug(f"系统提示词长度: {len(prompts['system'])} 字符")
-        logger.debug(f"用户提示词长度: {len(prompts['user'])} 字符")
-        logger.debug(f"用户提示词内容:\n{prompts['user'][:500]}...")
-
-        # 步骤3：调用 LLM 生成答案
+        # 步骤3：调用 LLM 生成答案（流式）
         llm = LLMService()
-        answer = llm.generate_text(
+        answer_chunks = []
+
+        llm_start = time.time()
+
+        for chunk in llm.generate_text_stream(
             prompt=prompts['user'],
             system_prompt=prompts['system'],
-        )
-        state.answer = answer
-        state.add_intermediate_step("答案生成完成")
+        ):
+            answer_chunks.append(chunk)
 
-        # 调试日志：记录生成的答案
-        logger.info(f"生成答案长度: {len(answer)} 字符")
-        logger.debug(f"生成答案内容:\n{answer[:500]}...")
+        state.answer = "".join(answer_chunks)
+        llm_elapsed = (time.time() - llm_start) * 1000
+
+        logger.info(f"[{state.query_id}] LLM 生成完成 ({llm_elapsed:.2f}ms): {len(state.answer)} 字符")
 
         # 步骤4：计算多维度置信度
-        confidence_calc = ConfidenceCalculator()  # 从 settings 自动读取配置
+        confidence_start = time.time()
+        confidence_calc = ConfidenceCalculator()
 
         confidence_result = confidence_calc.calculate(
             question=state.question,
-            answer=answer,
+            answer=state.answer,
             documents=docs_dict,
         )
 
@@ -158,9 +148,14 @@ async def generate_response(state: AgentState) -> Dict[str, Any]:
         state.metadata['confidence_breakdown'] = confidence_result['breakdown']
         state.metadata['confidence_level'] = confidence_result['level']
 
-        state.add_intermediate_step(
-            f"置信度计算完成: {state.confidence:.2f} ({confidence_result['level']})"
-        )
+        confidence_elapsed = (time.time() - confidence_start) * 1000
+        logger.debug(f"[{state.query_id}] 置信度计算完成 ({confidence_elapsed:.2f}ms)")
+
+        generate_elapsed = (time.time() - generate_start) * 1000
+        logger.info(f"[{state.query_id}] ✅ 答案生成完成, 耗时 {generate_elapsed:.2f}ms")
+        print(f" ✅ 生成完成")
+
+        state.add_intermediate_step(f"答案生成完成 ({generate_elapsed:.0f}ms), 置信度: {state.confidence:.2f}")
 
         return {
             "answer": state.answer,
@@ -169,7 +164,9 @@ async def generate_response(state: AgentState) -> Dict[str, Any]:
             "current_node": "generate",
         }
     except Exception as e:
-        logger.error(f"响应生成失败: {e}", exc_info=True)
+        generate_elapsed = (time.time() - generate_start) * 1000
+        print(f" ❌")
+        logger.error(f"[{state.query_id}] ❌ 答案生成失败 ({generate_elapsed:.2f}ms): {e}", exc_info=True)
         state.set_error(f"响应生成失败: {e}")
         return {"error": str(e), "current_node": "generate"}
 

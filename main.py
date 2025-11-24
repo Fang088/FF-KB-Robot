@@ -251,14 +251,13 @@ class KBRobotCLI:
 
     async def query_kb(self, kb_id: str, question: str):
         """
-        直接查询知识库
+        直接查询知识库（支持流式显示）
 
         Args:
             kb_id: 知识库 ID
             question: 问题
         """
         try:
-            print(f"\n⏳ 正在查询知识库...")
             result = await self.agent.execute_query(
                 kb_id=kb_id,
                 question=question,
@@ -269,39 +268,61 @@ class KBRobotCLI:
 
         except Exception as e:
             logger.error(f"查询失败: {e}")
-            print(f"✗ 查询失败: {e}")
+            print(f"❌ 查询失败: {e}")
 
     @staticmethod
     def _print_result(result):
         """
-        打印查询结果
+        打印查询结果（包含性能信息）
 
         Args:
             result: 查询结果字典
         """
-        print("\n" + "=" * 70)
-        print("答案:")
-        print("-" * 70)
+        print("\n" + "="*70)
+        print("【答案】")
+        print("-"*70)
         answer = result.get("answer", "无答案")
         print(answer)
 
         # 显示相关文档
         retrieved_docs = result.get("retrieved_docs", [])
         if retrieved_docs:
-            print("\n相关文档:")
-            print("-" * 70)
+            print("\n【相关文档】")
+            print("-"*70)
             for i, doc in enumerate(retrieved_docs, 1):
                 score = doc.get("score", 0)
-                content = doc.get("content", "")[:100]
-                print(f"\n  {i}. 相关度: {score:.4f}")
+                content = doc.get("content", "")[:150]
+                print(f"\n  📄 文档 {i}")
+                print(f"     相关度: {score:.4f}")
                 print(f"     内容: {content}...")
 
         # 显示统计信息
-        print("\n" + "-" * 70)
+        print("\n【统计信息】")
+        print("-"*70)
+
         confidence = result.get("confidence", 0)
         response_time = result.get("response_time_ms", 0)
-        print(f"置信度: {confidence:.4f} | 耗时: {response_time:.2f}ms")
-        print("=" * 70)
+        from_cache = result.get("from_cache", False)
+
+        confidence_level = "低 🔴" if confidence < 0.5 else "中 🟡" if confidence < 0.75 else "高 🟢"
+        cache_status = "✅ 缓存命中" if from_cache else "❌ 新鲜查询"
+
+        print(f"  置信度: {confidence:.2f} ({confidence_level})")
+        print(f"  状态: {cache_status}")
+        print(f"  耗时: {response_time:.0f}ms")
+
+        # 显示置信度分解（如果有）
+        metadata = result.get("metadata", {})
+        breakdown = metadata.get("confidence_breakdown", {})
+        if breakdown:
+            print("\n  置信度分解:")
+            print(f"    • 检索质量: {breakdown.get('retrieval', 0):.2f}")
+            print(f"    • 答案完整度: {breakdown.get('completeness', 0):.2f}")
+            print(f"    • 关键词匹配: {breakdown.get('keyword_match', 0):.2f}")
+            print(f"    • 答案质量: {breakdown.get('answer_quality', 0):.2f}")
+            print(f"    • 答案一致性: {breakdown.get('consistency', 0):.2f}")
+
+        print("="*70 + "\n")
 
     def print_config(self):
         """打印当前配置信息"""

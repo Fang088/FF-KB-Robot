@@ -36,10 +36,24 @@ class KnowledgeBaseManager:
             api_base=settings.EMBEDDING_API_BASE,
             model_name=settings.EMBEDDING_MODEL_NAME,
         )
+        # 准备向量存储配置
+        hnsw_config = {}
+        if settings.VECTOR_STORE_TYPE == "hnsw":
+            hnsw_config = {
+                "index_path": settings.HNSW_INDEX_PATH,
+                "max_elements": settings.HNSW_MAX_ELEMENTS,
+                "ef_construction": settings.HNSW_EF_CONSTRUCTION,
+                "ef_search": settings.HNSW_EF_SEARCH,
+                "m": settings.HNSW_M,
+                "distance_metric": settings.HNSW_DISTANCE_METRIC,
+            }
+
         self.vector_store = VectorStoreClient(
             store_type=settings.VECTOR_STORE_TYPE,
             path_or_url=settings.VECTOR_STORE_PATH,
             collection_name=settings.VECTOR_STORE_COLLECTION_NAME,
+            embedding_dim=settings.EMBEDDING_DIMENSION,
+            hnsw_config=hnsw_config,
         )
 
         # 数据库连接
@@ -224,6 +238,23 @@ class KnowledgeBaseManager:
                     created_at.isoformat()
                 ))
 
+                # 插入文本分块记录到text_chunks表
+                for i, (chunk_content, chunk_id) in enumerate(zip(chunks, chunk_ids)):
+                    cursor.execute("""
+                        INSERT INTO text_chunks
+                        (id, document_id, kb_id, content, chunk_index, vector_id, metadata, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        chunk_id,
+                        doc_id,
+                        kb_id,
+                        chunk_content,
+                        i,
+                        chunk_id,
+                        str(metadatas[i] if i < len(metadatas) else {}),
+                        created_at.isoformat()
+                    ))
+
                 # 更新知识库统计信息
                 cursor.execute("""
                     UPDATE knowledge_bases
@@ -234,6 +265,7 @@ class KnowledgeBaseManager:
                 """, (len(chunks), created_at.isoformat(), kb_id))
 
                 conn.commit()
+                logger.info(f"已保存 {len(chunks)} 个文本分块到数据库")
             finally:
                 conn.close()
 

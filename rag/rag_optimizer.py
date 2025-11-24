@@ -57,66 +57,24 @@ def get_rag_config() -> Dict[str, Any]:
 
 
 class PromptTemplate:
-    """专业的提示词模板"""
+    """专业的提示词模板 - 优化版"""
 
-    # RAG 系统提示词 - 改进版
-    RAG_SYSTEM_PROMPT = """你是一个专业、严谨的知识库问答助手。你需要遵循以下步骤进行回答：
-
-【第一步：理解问题】
-- 分析用户问题的核心需求
-- 识别问题涉及的关键概念和实体
-- 确定问题属于什么类型（定义、解释、对比等）
-
-【第二步：查阅参考文档】
-- 仔细阅读所有提供的参考文档
-- 找出与问题最相关的部分
-- 检查文档之间是否存在补充或矛盾信息
-
-【第三步：组织答案】
-- 直接、清晰地回答问题的核心
-- 用文档中的具体证据支持你的观点
-- 如果文档中有多个相关信息，要综合呈现
-
-【第四步：质量检查】
-- 检查答案是否完整回答了问题
-- 确保答案基于提供的文档内容
-- 如果文档信息不足，明确指出限制
-
-【回答格式要求】
-
-## 直接答案
-[简洁、准确地直接回答问题，1-2 句]
-
-## 详细解释
-[基于参考文档的详细说明，2-3 段]
-
-## 关键依据
-- [列出支持答案的关键信息来源]
-
-## 补充说明
-[任何需要澄清的地方或相关提示]
-
-【重要提醒】
-- 只基于提供的文档进行回答
-- 不要添加文档中没有的信息
-- 如果无法完全回答，请说明原因
-- 保持专业但友好的语气"""
-
-    # 基础 RAG 提示词（简洁版本，用于简单问题）
-    RAG_SIMPLE_PROMPT = """你是一个知识库问答助手。根据以下参考文档直接回答用户的问题。
+    # RAG 系统提示词 - 精简高效版
+    # 移除冗余步骤，保留核心要求，加快 LLM 生成速度
+    RAG_SYSTEM_PROMPT = """你是一个知识库问答助手。直接、准确地回答问题。
 
 要求：
-1. 直接、清晰地回答
-2. 只基于提供的文档
-3. 引用具体信息来源
+1. 仅基于提供的文档回答
+2. 清晰简洁，避免冗余
+3. 如文档信息不足，明确指出"""
 
-【参考文档】
+    # 简洁版 RAG 提示词 - 用于所有场景
+    RAG_SIMPLE_PROMPT = """【参考文档】
 {context}
 
-【用户问题】
-{question}
+【问题】{question}
 
-请直接给出答案："""
+请直接回答："""
 
     @staticmethod
     def format_rag_prompt(
@@ -125,12 +83,12 @@ class PromptTemplate:
         question_type: QuestionType = QuestionType.FACTUAL,
     ) -> Dict[str, str]:
         """
-        格式化 RAG 提示词 - 根据问题类型选择合适的模板
+        格式化 RAG 提示词 - 统一使用简洁版本以提升生成速度
 
         Args:
             question: 用户问题
             documents: 检索到的文档列表
-            question_type: 问题类型
+            question_type: 问题类型（保留向后兼容，但不影响输出）
 
         Returns:
             {system: 系统提示词, user: 用户提示词}
@@ -138,25 +96,11 @@ class PromptTemplate:
         # 格式化上下文
         context = PromptTemplate._format_context(documents)
 
-        # 简单问题用简洁模板
-        if question_type in [QuestionType.FACTUAL] and len(documents) <= 3:
-            user_prompt = PromptTemplate.RAG_SIMPLE_PROMPT.format(
-                context=context,
-                question=question,
-            )
-            return {
-                "system": PromptTemplate.RAG_SYSTEM_PROMPT,
-                "user": user_prompt,
-            }
-
-        # 复杂问题用详细模板
-        user_prompt = f"""【用户问题】
-{question}
-
-【参考文档】
-{context}
-
-请按照要求进行回答。"""
+        # 统一使用简洁版本 - 加快生成速度
+        user_prompt = PromptTemplate.RAG_SIMPLE_PROMPT.format(
+            context=context,
+            question=question,
+        )
 
         return {
             "system": PromptTemplate.RAG_SYSTEM_PROMPT,
@@ -166,7 +110,7 @@ class PromptTemplate:
     @staticmethod
     def _format_context(documents: List[Dict[str, Any]]) -> str:
         """
-        格式化上下文 - 将文档列表转换为易读的字符串
+        格式化上下文 - 精简版本，仅保留关键内容
 
         Args:
             documents: 文档列表
@@ -175,43 +119,33 @@ class PromptTemplate:
             格式化的上下文字符串
         """
         if not documents:
-            return """【说明】
-当前知识库中未找到与您的问题相关的文档。
-这可能是因为：
-1. 知识库内容还不完整
-2. 您的问题表述与文档的用词差异较大
-3. 知识库中可能确实没有相关信息
+            return "【提示】未找到相关文档。"
 
-系统将基于我的通用知识进行回答，但准确性可能有限。"""
-
+        # 精简格式，去除冗余信息
         formatted = []
         for i, doc in enumerate(documents, 1):
-            # 提取字段（支持两种格式：RetrievedDoc 和字典）
+            # 提取内容
             if isinstance(doc, dict):
                 content = doc.get('content', '')
-                score = doc.get('score', 0)
-                metadata = doc.get('metadata', {})
             else:
-                # 对象格式
                 content = getattr(doc, 'content', '')
-                score = getattr(doc, 'score', 0)
-                metadata = getattr(doc, 'metadata', {})
 
-            filename = metadata.get('filename', 'Unknown') if isinstance(
-                metadata, dict) else 'Unknown'
-
-            formatted.append(f"""【文档 {i}】
-来源: {filename}
-相关度: {score:.0%}
-内容:
-{content}
-""")
+            formatted.append(f"{i}. {content}")
 
         return "\n".join(formatted)
 
 
 class ConfidenceCalculator:
-    """多维度置信度计算器"""
+    """
+    多维度置信度计算器 - 改进版
+
+    置信度反映答案的可信度，综合考虑：
+    1. 检索质量（最重要）- 文档与问题的匹配程度
+    2. 答案完整度 - 答案长度和段落数
+    3. 关键词覆盖 - 问题的关键词是否在答案中
+    4. 答案质量 - 表达的专业性和清晰度
+    5. 答案一致性 - 答案与文档内容的一致程度
+    """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
@@ -224,7 +158,14 @@ class ConfidenceCalculator:
             config = get_rag_config()
 
         self.config = config
-        self.weights = config['confidence_weights']
+        # 新的权重分配（优先级：检索 > 完整度 > 关键词 > 质量 > 一致性）
+        self.weights = {
+            'retrieval': 0.45,           # 检索质量（最重要）
+            'completeness': 0.25,        # 答案完整度
+            'keyword_match': 0.15,       # 关键词匹配
+            'answer_quality': 0.10,      # 答案质量
+            'consistency': 0.05,         # 答案一致性
+        }
 
     def calculate(
         self,
@@ -254,27 +195,27 @@ class ConfidenceCalculator:
                 'level': 'low',
             }
 
-        # 各维度计算
-        retrieval_score = self._calculate_retrieval_score(documents)
-        keyword_score = self._calculate_keyword_match(question, answer)
-        completeness_score = self._calculate_completeness(answer)
-        consistency_score = self._calculate_consistency(answer, documents)
-        quality_score = self._calculate_answer_quality(answer)
+        # 各维度计算（按优先级）
+        retrieval_score = self._calculate_retrieval_score(documents)      # 45% 权重
+        completeness_score = self._calculate_completeness(answer)         # 25% 权重
+        keyword_score = self._calculate_keyword_match(question, answer)   # 15% 权重
+        quality_score = self._calculate_answer_quality(answer)            # 10% 权重
+        consistency_score = self._calculate_consistency(answer, documents) # 5% 权重
 
         # 加权综合
         overall = (
             retrieval_score * self.weights['retrieval'] +
-            keyword_score * self.weights['keyword_match'] +
             completeness_score * self.weights['completeness'] +
-            consistency_score * self.weights['consistency'] +
-            quality_score * self.weights['answer_quality']
+            keyword_score * self.weights['keyword_match'] +
+            quality_score * self.weights['answer_quality'] +
+            consistency_score * self.weights['consistency']
         )
 
-        # 确保在 0-0.95 范围内
-        overall = min(max(overall, 0.0), 0.95)
+        # 确保在 0-1 范围内
+        overall = min(max(overall, 0.0), 1.0)
 
         # 判断置信度等级
-        if overall >= 0.7:
+        if overall >= 0.75:
             level = 'high'
         elif overall >= 0.5:
             level = 'medium'
@@ -282,16 +223,27 @@ class ConfidenceCalculator:
             level = 'low'
 
         breakdown = {
-            'retrieval': retrieval_score,
-            'keyword_match': keyword_score,
-            'completeness': completeness_score,
-            'consistency': consistency_score,
-            'answer_quality': quality_score,
+            'retrieval': round(retrieval_score, 2),
+            'completeness': round(completeness_score, 2),
+            'keyword_match': round(keyword_score, 2),
+            'answer_quality': round(quality_score, 2),
+            'consistency': round(consistency_score, 2),
         }
 
-        logger.debug(
-            f"Confidence calculation: overall={overall:.2f}, level={level}, "
-            f"breakdown={breakdown}"
+        # 详细的日志输出，包括计算过程
+        print(f"\n[置信度详细计算]")
+        print(f"  检索质量: {retrieval_score:.3f} × 0.45 = {retrieval_score * 0.45:.3f}")
+        print(f"  答案完整度: {completeness_score:.3f} × 0.25 = {completeness_score * 0.25:.3f}")
+        print(f"  关键词匹配: {keyword_score:.3f} × 0.15 = {keyword_score * 0.15:.3f}")
+        print(f"  答案质量: {quality_score:.3f} × 0.10 = {quality_score * 0.1:.3f}")
+        print(f"  答案一致性: {consistency_score:.3f} × 0.05 = {consistency_score * 0.05:.3f}")
+        print(f"  ────────────────────────")
+        print(f"  总置信度: {overall:.3f}")
+
+        logger.info(
+            f"置信度计算: overall={overall:.2f}, level={level}, "
+            f"retrieval={retrieval_score:.2f}, completeness={completeness_score:.2f}, "
+            f"keyword={keyword_score:.2f}, quality={quality_score:.2f}, consistency={consistency_score:.2f}"
         )
 
         return {
@@ -304,42 +256,72 @@ class ConfidenceCalculator:
         self, documents: List[Dict[str, Any]]
     ) -> float:
         """
-        计算检索质量分数
+        计算检索质量分数 - 最关键的维度！
+
+        说明：
+        - HNSW 返回的 score 是**距离值**，不是相似度
+        - 距离越小，说明向量越接近（越相似）
+        - 距离 0: 完全相同
+        - 距离 < 1: 非常相似
+        - 距离 1-3: 比较相似
+        - 距离 > 3: 相关度一般
+
+        策略：
+        - 最佳文档相似度：80% 权重
+        - 其他文档平均相似度：20% 权重
 
         Args:
             documents: 文档列表
 
         Returns:
-            检索分数 (0-1)
+            检索分数 (0-1)，越接近 1 越好
         """
         if not documents:
             return 0.0
 
-        # 提取所有文档的相似度分数
-        scores = []
+        # 提取所有文档的距离分数
+        distances = []
         for doc in documents:
             if isinstance(doc, dict):
-                score = doc.get('score', 0)
+                distance = doc.get('score', 0)
             else:
-                score = getattr(doc, 'score', 0)
-            scores.append(score)
+                distance = getattr(doc, 'score', 0)
+            distances.append(distance)
 
-        if not scores:
+        if not distances:
             return 0.0
 
-        # 策略：
-        # - 最高分 80% 权重（最相关文档）
-        # - 平均分 20% 权重（整体质量）
-        best_score = max(scores)
-        avg_score = sum(scores) / len(scores)
+        # 关键：将距离转换为相似度
+        # 使用公式: similarity = 1 / (1 + distance)
+        # 这样距离 0 → 相似度 1, 距离 1 → 相似度 0.5, 距离 3 → 相似度 0.25
+        similarities = [1.0 / (1.0 + distance) for distance in distances]
 
-        retrieval_score = best_score * 0.8 + avg_score * 0.2
+        # 最佳文档（距离最小）的相似度，80% 权重
+        best_similarity = max(similarities)
+
+        # 其他文档的平均相似度，20% 权重
+        avg_similarity = sum(similarities) / len(similarities)
+
+        # 综合评分
+        retrieval_score = best_similarity * 0.8 + avg_similarity * 0.2
+
+        logger.debug(
+            f"检索得分: distances={[f'{d:.3f}' for d in distances]}, "
+            f"similarities={[f'{s:.3f}' for s in similarities]}, "
+            f"best={best_similarity:.3f}, avg={avg_similarity:.3f}, "
+            f"final={retrieval_score:.3f}"
+        )
 
         return min(retrieval_score, 1.0)
 
     def _calculate_keyword_match(self, question: str, answer: str) -> float:
         """
         计算关键词匹配度
+
+        策略：
+        - 提取问题中的关键词（去除停用词）
+        - 检查这些关键词是否出现在答案中
+        - 匹配比例越高，分数越高
 
         Args:
             question: 问题
@@ -352,7 +334,8 @@ class ConfidenceCalculator:
         keywords = self._extract_keywords(question)
 
         if not keywords:
-            return 0.5
+            # 没有提取到关键词，返回中等分数
+            return 0.6
 
         # 计算有多少关键词出现在答案中
         answer_lower = answer.lower()
@@ -360,26 +343,21 @@ class ConfidenceCalculator:
 
         keyword_match = matched / len(keywords)
 
+        logger.debug(
+            f"关键词匹配: 总数={len(keywords)}, 匹配={matched}, "
+            f"关键词={keywords}, 匹配度={keyword_match:.3f}"
+        )
+
         return min(keyword_match, 1.0)
-
-    def _extract_keywords(self, text: str) -> List[str]:
-        """提取关键词"""
-        stopwords = {
-            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to',
-            '的', '是', '了', '在', '和', '这', '个', '有', '什么', '哪',
-            '怎样', '怎么', '如何', '请', '帮',
-        }
-
-        keywords = [
-            word.lower() for word in text.split()
-            if len(word) > 1 and word.lower() not in stopwords
-        ]
-
-        return keywords
 
     def _calculate_completeness(self, answer: str) -> float:
         """
         计算答案完整度
+
+        策略：
+        - 答案长度：目标 150-400 字符（考虑到 LLM 的实际输出）
+        - 段落数：LLM 通常不会产生明显的多段落，所以权重降低
+        - 句子数：检查是否有多个句子（比段落数更实际）
 
         Args:
             answer: 答案
@@ -387,18 +365,44 @@ class ConfidenceCalculator:
         Returns:
             完整度分数 (0-1)
         """
-        # 策略：
-        # - 长度足够（> 100 字符）：80% 分
-        # - 有多个段落（> 1 段）：20% 分
         answer_len = len(answer.strip())
-        paragraph_count = len([p for p in answer.split('\n') if p.strip()])
+        # 更好的段落计数方式：按句号、逗号等分割
+        sentences = [s.strip() for s in answer.replace('，', '。').replace(',', '.').split('。') if s.strip()]
+        sentence_count = len(sentences)
 
-        length_score = min(answer_len / 200, 1.0)  # 200 字符为目标
-        paragraph_score = min(paragraph_count / 3, 1.0)  # 3 段为目标
+        # 长度评分：150 字符为基准
+        # LLM 一般输出 100-600 字符为正常范围
+        if answer_len < 50:
+            length_score = min(answer_len / 100, 0.3)  # 最多 0.3
+        elif answer_len < 150:
+            length_score = 0.3 + (answer_len - 50) / 333  # 0.3-0.6
+        elif answer_len < 300:
+            length_score = 0.6 + (answer_len - 150) / 300  # 0.6-0.8
+        elif answer_len < 600:
+            length_score = 0.8 + (answer_len - 300) / 600  # 0.8-1.0
+        else:
+            length_score = 1.0
 
-        completeness = length_score * 0.8 + paragraph_score * 0.2
+        # 句子评分：更符合 LLM 输出的实际情况
+        if sentence_count == 0:
+            sentence_score = 0.3
+        elif sentence_count == 1:
+            sentence_score = 0.6
+        elif sentence_count < 3:
+            sentence_score = 0.75
+        else:
+            sentence_score = 1.0
 
-        return completeness
+        # 综合：长度 60%，句子数 40%（降低了对多段落的依赖）
+        completeness = length_score * 0.6 + sentence_score * 0.4
+
+        logger.debug(
+            f"完整度评分: 长度={answer_len}字符({length_score:.2f}), "
+            f"句子={sentence_count}个({sentence_score:.2f}), "
+            f"综合={completeness:.3f}"
+        )
+
+        return min(completeness, 1.0)
 
     def _calculate_consistency(
         self, answer: str, documents: List[Dict[str, Any]]
@@ -406,7 +410,10 @@ class ConfidenceCalculator:
         """
         计算答案一致性
 
-        检查答案是否与文档内容一致
+        策略：
+        - 提取答案中的关键词和实体
+        - 检查这些是否出现在源文档中
+        - 出现得越多，说明答案基于文档的内容
 
         Args:
             answer: 答案
@@ -416,10 +423,9 @@ class ConfidenceCalculator:
             一致性分数 (0-1)
         """
         if not documents:
-            return 0.5
+            return 0.6
 
-        # 简单的一致性检查：
-        # 检查答案中是否包含文档中的关键数字、人名等
+        # 合并所有文档内容
         doc_texts = []
         for doc in documents:
             if isinstance(doc, dict):
@@ -430,30 +436,47 @@ class ConfidenceCalculator:
 
         combined_docs = ' '.join(doc_texts)
 
-        # 提取答案中的数字、名词等
+        # 策略：检查答案中的关键信息是否在文档中出现
+        # 1. 检查数字是否出现
         numbers = re.findall(r'\d+', answer)
-        answer_entities = re.findall(r'[A-Z][a-z]+', answer)
+        if numbers:
+            numbers_in_docs = sum(1 for num in numbers if num in combined_docs)
+            number_match_ratio = numbers_in_docs / len(numbers)
+        else:
+            # 如果没有数字，不处罚，设为 1.0
+            numbers_in_docs = 0
+            number_match_ratio = 1.0
 
-        # 检查是否在文档中出现
-        consistency_score = 0.7  # 基础分
+        # 2. 检查关键词是否出现
+        keywords = self._extract_keywords(answer)
+        if keywords:
+            keywords_in_docs = sum(1 for kw in keywords if kw in combined_docs)
+            keyword_match_ratio = keywords_in_docs / len(keywords)
+        else:
+            keywords_in_docs = 0
+            keyword_match_ratio = 1.0
 
-        for number in numbers:
-            if number in combined_docs:
-                consistency_score += 0.1
-                break  # 只加一次
+        # 综合评分：数字 20%, 关键词 80%
+        # 降低了对数字的依赖，因为并非所有答案都包含数字
+        consistency = number_match_ratio * 0.2 + keyword_match_ratio * 0.8
 
-        for entity in answer_entities[:2]:  # 最多检查 2 个实体
-            if entity.lower() in combined_docs:
-                consistency_score += 0.1
-                break
+        logger.debug(
+            f"一致性评分: 数字{numbers_in_docs}/{len(numbers) if numbers else 0}({number_match_ratio:.2f}), "
+            f"关键词{keywords_in_docs}/{len(keywords) if keywords else 0}({keyword_match_ratio:.2f}), "
+            f"综合={consistency:.3f}"
+        )
 
-        return min(consistency_score, 1.0)
+        return min(consistency, 1.0)
 
     def _calculate_answer_quality(self, answer: str) -> float:
         """
         计算答案质量
 
-        检查答案的表达质量
+        策略：
+        - 表达清晰度：有适当的标点符号
+        - 词汇多样性：不要重复过多相同的词
+        - 信息明确性：避免使用模糊表述（可能、也许等）
+        - 长度适宜性：太短说明不够完整，太长说明冗余
 
         Args:
             answer: 答案
@@ -463,28 +486,75 @@ class ConfidenceCalculator:
         """
         quality = 0.5  # 基础分
 
-        # 有适当的标点符号
+        # 1. 标点符号检查（2 分）
         if answer.count('。') >= 1 or answer.count('.') >= 1:
-            quality += 0.2
-
-        # 没有过多的重复字词
-        words = answer.split()
-        if len(words) > 0 and len(set(words)) / len(words) > 0.6:
+            quality += 0.1
+        if answer.count('，') >= 2 or answer.count(',') >= 2:
             quality += 0.1
 
-        # 包含具体信息而不是模糊的表述
+        # 2. 词汇多样性检查（2 分）
+        words = answer.split()
+        if len(words) > 0:
+            unique_ratio = len(set(words)) / len(words)
+            if unique_ratio > 0.7:
+                quality += 0.1
+            if unique_ratio > 0.8:
+                quality += 0.1
+
+        # 3. 避免模糊表述（2 分）
         vague_phrases = [
             '可能', '也许', '感觉', '似乎', '不太确定',
-            'might', 'maybe', 'probably', 'seems'
+            'might', 'maybe', 'probably', 'seems', 'unclear'
         ]
         vague_count = sum(1 for phrase in vague_phrases if phrase in answer.lower())
 
         if vague_count == 0:
             quality += 0.2
-        elif vague_count <= 1:
+        elif vague_count == 1:
             quality += 0.1
 
+        # 4. 长度适宜性（2 分）
+        answer_len = len(answer.strip())
+        if 100 < answer_len < 1000:
+            quality += 0.15
+        if 200 < answer_len < 800:
+            quality += 0.05
+
+        logger.debug(
+            f"答案质量评分: 长度={answer_len}, 标点=✓, "
+            f"词汇多样性={len(set(words))}/{len(words) if words else 0}, "
+            f"模糊词={vague_count}, 综合={min(quality, 1.0):.3f}"
+        )
+
         return min(quality, 1.0)
+
+    def _extract_keywords(self, text: str) -> List[str]:
+        """
+        提取关键词（去除停用词）
+
+        Args:
+            text: 输入文本
+
+        Returns:
+            关键词列表
+        """
+        stopwords = {
+            # 英文
+            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+            'is', 'are', 'be', 'been', 'being', 'have', 'has', 'had', 'do',
+            'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might',
+            # 中文
+            '的', '是', '了', '在', '和', '这', '个', '有', '什么', '哪',
+            '怎样', '怎么', '如何', '请', '帮', '我', '他', '她', '它',
+            '都', '还', '也', '只', '就', '很', '太', '才', '去', '来',
+        }
+
+        keywords = [
+            word.lower() for word in text.split()
+            if len(word) > 1 and word.lower() not in stopwords
+        ]
+
+        return keywords
 
 
 def classify_question(question: str) -> QuestionType:
