@@ -27,7 +27,7 @@ class HNSWVectorStore:
 
     def __init__(
         self,
-        index_path: str = "./db/vector_store/hnsw_index",
+        index_path: str = None,  # 必须由调用者提供，应该是 db/vector_store 的绝对路径
         embedding_dim: int = 1536,
         max_elements: int = 1000000,
         ef_construction: int = 200,
@@ -40,7 +40,9 @@ class HNSWVectorStore:
         初始化 HNSW 向量存储
 
         Args:
-            index_path: 索引文件存储路径
+            index_path: 索引文件存储路径（必须由调用者提供绝对路径）
+                       本应该是 PROJECT_ROOT/db/vector_store
+                       HNSW 的索引文件 (hnsw.bin, metadata.json) 将存储在这个目录下
             embedding_dim: 向量维度（默认 1536）
             max_elements: 最大元素数
             ef_construction: 构建时扩展参数（越大越精确但越慢）
@@ -49,6 +51,10 @@ class HNSWVectorStore:
             distance_metric: 距离度量方式（l2, cosine, ip）
             enable_sqlite_metadata: 是否使用 SQLite 存储元数据
         """
+        # 验证 index_path 是否提供
+        if index_path is None:
+            raise ValueError("必须提供 index_path，确保使用绝对路径！")
+
         self.index_path = Path(index_path)
         self.embedding_dim = embedding_dim
         self.max_elements = max_elements
@@ -85,7 +91,14 @@ class HNSWVectorStore:
         return metric_map.get(metric.lower(), "l2")
 
     def load_or_create_index(self):
-        """加载现有索引或创建新索引"""
+        """
+        加载现有索引或创建新索引
+
+        文件存储位置：
+        - hnsw.bin: 二进制索引文件
+        - metadata.json: 元数据文件
+        这两个文件都直接存储在 self.index_path 目录下
+        """
         index_file = self.index_path / "hnsw.bin"
         metadata_file = self.index_path / "metadata.json"
 

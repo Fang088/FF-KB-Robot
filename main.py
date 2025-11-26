@@ -6,7 +6,6 @@ FF-KB-Robot 主程序入口
 import asyncio
 import argparse
 import logging
-import sqlite3
 from agent.agent_core import AgentCore
 from retrieval.knowledge_base_manager import KnowledgeBaseManager
 from config.settings import settings
@@ -62,6 +61,10 @@ class KBRobotCLI:
                             print(f"     描述: {kb['description']}")
                     print("-" * 70)
                 continue  # 继续循环获取输入
+            
+            if input_kb_id.lower() == "config":
+                self.print_config()
+                continue
 
             if not input_kb_id:
                 # 创建新知识库
@@ -137,27 +140,17 @@ class KBRobotCLI:
                     print("-" * 70)
 
                     # 显示当前知识库的文档列表
-                    db_path = str(settings.PROJECT_ROOT / settings.DATABASE_URL.replace("sqlite:///./", ""))
-                    conn = sqlite3.connect(db_path)
-                    cursor = conn.cursor()
-                    try:
-                        cursor.execute("SELECT id, filename, chunk_count, created_at FROM documents WHERE kb_id = ?", (kb_id,))
-                        documents = cursor.fetchall()
-
-                        if documents:
-                            print("\n" + "-" * 70)
-                            print("知识库中文档:")
-                            print("-" * 70)
-                            for i, doc in enumerate(documents, 1):
-                                print(f"\n  {i}. 文件名: {doc[1]}")
-                                print(f"     ID: {doc[0]}")
-                                print(f"     分块数: {doc[2]}")
-                                print(f"     上传时间: {doc[3]}")
-                            print("-" * 70)
-                    except Exception as e:
-                        logger.error(f"获取文档列表失败: {e}")
-                    finally:
-                        conn.close()
+                    documents = self.kb_manager.get_kb_documents(kb_id)
+                    if documents:
+                        print("\n" + "-" * 70)
+                        print("知识库中文档:")
+                        print("-" * 70)
+                        for i, doc in enumerate(documents, 1):
+                            print(f"\n  {i}. 文件名: {doc['filename']}")
+                            print(f"     ID: {doc['id']}")
+                            print(f"     分块数: {doc['chunk_count']}")
+                            print(f"     上传时间: {doc['created_at']}")
+                        print("-" * 70)
                 continue
 
             if question.lower() == "upload":
@@ -291,7 +284,7 @@ class KBRobotCLI:
             print("-"*70)
             for i, doc in enumerate(retrieved_docs, 1):
                 score = doc.get("score", 0)
-                content = doc.get("content", "")[:150]
+                content = doc.get("content", "")[:10]
                 print(f"\n  📄 文档 {i}")
                 print(f"     相关度: {score:.4f}")
                 print(f"     内容: {content}...")
@@ -355,94 +348,11 @@ class KBRobotCLI:
 
 
 def main():
-    """主函数"""
-    parser = argparse.ArgumentParser(
-        description="FF-KB-Robot 知识库机器人 (CLI 模式)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-使用示例：
-
-  # 启动交互模式（默认）
-  python main.py -i
-  python main.py
-
-  # 直接查询知识库
-  python main.py -kb kb_001 -q "你的问题"
-
-  # 上传文档
-  python main.py -kb kb_001 -upload /path/to/document.pdf
-
-  # 显示配置信息
-  python main.py -config
-
-  # 删除知识库
-  python main.py -delete-kb kb_001
-
-  # 删除文档
-  python main.py -delete-doc doc_001
-
-注意：
-  - 所有 API 请求都通过 302.ai API (https://api.302.ai/v1) 进行
-  - LLM 模型: gpt-5-nano
-  - Embedding 模型: text-embedding-ada-002
-  - 请在 .env 文件中配置 API Key
-        """,
-    )
-
-    parser.add_argument(
-        "-i", "--interactive",
-        action="store_true",
-        help="启动交互模式（默认）"
-    )
-    parser.add_argument(
-        "-kb", "--knowledge-base",
-        type=str,
-        help="知识库 ID"
-    )
-    parser.add_argument(
-        "-upload",
-        type=str,
-        help="上传文档（指定文件路径）"
-    )
-    parser.add_argument(
-        "-q", "--query",
-        type=str,
-        help="查询问题"
-    )
-    parser.add_argument(
-        "-config",
-        action="store_true",
-        help="显示配置信息"
-    )
-    parser.add_argument(
-        "-delete-kb",
-        type=str,
-        help="删除知识库（指定知识库 ID）"
-    )
-    parser.add_argument(
-        "-delete-doc",
-        type=str,
-        help="删除文档（指定文档 ID）"
-    )
-
-    args = parser.parse_args()
 
     try:
         cli = KBRobotCLI()
-
-        if args.config:
-            cli.print_config()
-        elif args.delete_kb:
-            asyncio.run(cli.delete_knowledge_base(args.delete_kb))
-        elif args.delete_doc:
-            asyncio.run(cli.delete_document(args.delete_doc))
-        elif args.knowledge_base and args.upload:
-            asyncio.run(cli.upload_document(args.knowledge_base, args.upload))
-        elif args.knowledge_base and args.query:
-            asyncio.run(cli.query_kb(args.knowledge_base, args.query))
-        else:
-            # 默认启动交互模式
-            asyncio.run(cli.interactive_mode())
+        # 默认启动交互模式
+        asyncio.run(cli.interactive_mode())
 
     except KeyboardInterrupt:
         print("\n\n程序已中断\n")

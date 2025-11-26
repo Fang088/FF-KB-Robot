@@ -28,7 +28,6 @@ async def retrieve_documents(state: AgentState) -> Dict[str, Any]:
     try:
         # 调用 KnowledgeBaseManager 进行检索
         from retrieval.knowledge_base_manager import KnowledgeBaseManager
-        from .state import RetrievedDoc
 
         kb_manager = KnowledgeBaseManager()
 
@@ -130,6 +129,12 @@ async def generate_response(state: AgentState) -> Dict[str, Any]:
             answer_chunks.append(chunk)
 
         state.answer = "".join(answer_chunks)
+
+        # 安全检查：如果答案为空，给出警告
+        if not state.answer or state.answer.strip() == "":
+            logger.warning(f"[{state.query_id}] ⚠️ LLM 生成了空答案")
+            state.answer = "抱歉，无法生成有效答案。请检查 LLM API 连接和文档质量。"
+
         llm_elapsed = (time.time() - llm_start) * 1000
 
         logger.info(f"[{state.query_id}] LLM 生成完成 ({llm_elapsed:.2f}ms): {len(state.answer)} 字符")

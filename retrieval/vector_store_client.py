@@ -19,7 +19,7 @@ class VectorStoreClient:
     def __init__(
         self,
         store_type: str = "hnsw",
-        path_or_url: str = "./db/vector_store",
+        path_or_url: str = None,  # 必须由调用者提供，确保使用 PROJECT_ROOT 的绝对路径
         collection_name: str = "ff_kb_documents",
         embedding_dim: int = 1536,
         hnsw_config: Optional[Dict[str, Any]] = None,
@@ -29,13 +29,17 @@ class VectorStoreClient:
 
         Args:
             store_type: 数据库类型（必须为 'hnsw'）
-            path_or_url: HNSW索引文件路径
+            path_or_url: HNSW索引文件路径（必须提供绝对路径）
             collection_name: 集合名称（向后兼容，HNSW不使用）
             embedding_dim: 向量维度
             hnsw_config: HNSW配置
         """
         if store_type != "hnsw":
             raise ValueError(f"仅支持HNSW后端，不支持: {store_type}")
+
+        # 验证 path_or_url 是否提供
+        if path_or_url is None:
+            raise ValueError("必须提供 path_or_url，确保使用绝对路径！")
 
         self.store_type = store_type
         self.path_or_url = path_or_url
@@ -53,10 +57,12 @@ class VectorStoreClient:
             from .hnsw_vector_store import HNSWVectorStore
 
             # 准备HNSW配置
-            hnsw_path = self.hnsw_config.get(
-                "index_path",
-                str(Path(self.path_or_url) / "hnsw_index")
-            )
+            # 优先使用 hnsw_config 中的 index_path，否则使用 path_or_url
+            # 注意: index_path 和 path_or_url 应该指向同一目录 (db/vector_store)
+            hnsw_path = self.hnsw_config.get("index_path")
+            if not hnsw_path:
+                # 如果配置中没有提供，直接使用 path_or_url
+                hnsw_path = self.path_or_url
 
             self.client = HNSWVectorStore(
                 index_path=hnsw_path,

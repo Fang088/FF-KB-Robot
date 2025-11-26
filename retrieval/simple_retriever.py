@@ -142,7 +142,7 @@ class SimpleRetriever:
         """获取检索器统计信息"""
         stats = {
             "vector_store_type": settings.VECTOR_STORE_TYPE,
-            "vector_store_config": self.kb_manager.vector_store.get_collection_stats(),
+            "vector_store_config": self.kb_manager.vector_manager.get_vector_stats(),
         }
 
         if self.cache_manager:

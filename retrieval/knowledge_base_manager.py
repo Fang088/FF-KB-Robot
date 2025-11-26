@@ -6,11 +6,12 @@ import os
 from typing import List, Dict, Any, Optional
 import uuid
 import logging
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 from .document_processor import DocumentProcessor
-from .vector_store_client import VectorStoreClient
+from .vector_manager import VectorManager
+from .retrieval_postprocessor import RetrievalPostProcessor
+from .kb_store import KBStore
 from models.embedding_service import EmbeddingService
 from config.settings import settings
 from utils.cache_manager import get_cache_manager
@@ -40,6 +41,8 @@ class KnowledgeBaseManager:
         hnsw_config = {}
         if settings.VECTOR_STORE_TYPE == "hnsw":
             hnsw_config = {
+                # HNSW 索引路径应与 VECTOR_STORE_PATH 相同
+                # 索引文件 (hnsw.bin, metadata.json) 直接存储在该目录下
                 "index_path": settings.HNSW_INDEX_PATH,
                 "max_elements": settings.HNSW_MAX_ELEMENTS,
                 "ef_construction": settings.HNSW_EF_CONSTRUCTION,
@@ -48,7 +51,8 @@ class KnowledgeBaseManager:
                 "distance_metric": settings.HNSW_DISTANCE_METRIC,
             }
 
-        self.vector_store = VectorStoreClient(
+        # 使用 VectorManager 而不是直接使用 VectorStoreClient
+        self.vector_manager = VectorManager(
             store_type=settings.VECTOR_STORE_TYPE,
             path_or_url=settings.VECTOR_STORE_PATH,
             collection_name=settings.VECTOR_STORE_COLLECTION_NAME,
@@ -56,36 +60,14 @@ class KnowledgeBaseManager:
             hnsw_config=hnsw_config,
         )
 
-        # 数据库连接
+        # 初始化 KB 仓储 - 用于数据库操作
         self.db_path = str(settings.PROJECT_ROOT / settings.DATABASE_URL.replace("sqlite:///./", ""))
-        self._initialize_db()
+        self.kb_store = KBStore(self.db_path)
+
+        # 初始化后处理器
+        self.postprocessor = RetrievalPostProcessor()
 
         logger.info("知识库管理器已初始化")
-
-    def _initialize_db(self):
-        """确保数据库表存在"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        try:
-            # 确保知识库表存在
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS knowledge_bases (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    description TEXT,
-                    tags TEXT,
-                    created_at TIMESTAMP,
-                    updated_at TIMESTAMP,
-                    document_count INTEGER DEFAULT 0,
-                    total_chunks INTEGER DEFAULT 0
-                )
-            """)
-            conn.commit()
-        except Exception as e:
-            logger.error(f"初始化数据库表失败: {e}")
-            raise
-        finally:
-            conn.close()
 
     def create_knowledge_base(
         self,
@@ -105,41 +87,13 @@ class KnowledgeBaseManager:
             知识库信息
         """
         try:
-            kb_id = str(uuid.uuid4())
-            created_at = datetime.now()
-
-            # 准备知识库信息
-            kb_info = {
-                "id": kb_id,
-                "name": name,
-                "description": description,
-                "tags": tags or [],
-                "created_at": created_at.isoformat(),
-                "document_count": 0,
-                "total_chunks": 0,
-            }
-
-            # 存储到数据库
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            try:
-                cursor.execute("""
-                    INSERT INTO knowledge_bases
-                    (id, name, description, tags, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (
-                    kb_id,
-                    name,
-                    description,
-                    ",".join(tags) if tags else None,
-                    created_at.isoformat(),
-                    created_at.isoformat()
-                ))
-                conn.commit()
-            finally:
-                conn.close()
-
-            logger.info(f"知识库已创建: {kb_id} - {name}")
+            # 使用 KBStore 创建知识库
+            kb_info = self.kb_store.create_kb(
+                name=name,
+                description=description,
+                tags=tags,
+            )
+            logger.info(f"知识库已创建: {kb_info['id']} - {name}")
             return kb_info
         except Exception as e:
             logger.error(f"创建知识库失败: {e}")
@@ -211,63 +165,20 @@ class KnowledgeBaseManager:
             ]
 
             # 添加到向量数据库
-            chunk_ids = self.vector_store.add_documents(
+            chunk_ids = self.vector_manager.add_vectors(
                 documents=chunks,
                 embeddings=embeddings,
                 metadatas=metadatas,
             )
 
             # 更新数据库记录
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-
-            try:
-                # 插入文档记录
-                cursor.execute("""
-                    INSERT INTO documents
-                    (id, kb_id, filename, temp_path, chunk_count, metadata, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    doc_id,
-                    kb_id,
-                    file_path.split("/")[-1],
-                    temp_file_path,
-                    len(chunks),
-                    str(metadata),
-                    created_at.isoformat(),
-                    created_at.isoformat()
-                ))
-
-                # 插入文本分块记录到text_chunks表
-                for i, (chunk_content, chunk_id) in enumerate(zip(chunks, chunk_ids)):
-                    cursor.execute("""
-                        INSERT INTO text_chunks
-                        (id, document_id, kb_id, content, chunk_index, vector_id, metadata, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        chunk_id,
-                        doc_id,
-                        kb_id,
-                        chunk_content,
-                        i,
-                        chunk_id,
-                        str(metadatas[i] if i < len(metadatas) else {}),
-                        created_at.isoformat()
-                    ))
-
-                # 更新知识库统计信息
-                cursor.execute("""
-                    UPDATE knowledge_bases
-                    SET document_count = document_count + 1,
-                        total_chunks = total_chunks + ?,
-                        updated_at = ?
-                    WHERE id = ?
-                """, (len(chunks), created_at.isoformat(), kb_id))
-
-                conn.commit()
-                logger.info(f"已保存 {len(chunks)} 个文本分块到数据库")
-            finally:
-                conn.close()
+            self.kb_store.add_document(
+                kb_id=kb_id,
+                doc_id=doc_id,
+                filename=file_path.split("/")[-1],
+                file_path=temp_file_path or file_path,
+                chunk_count=len(chunks),
+            )
 
             doc_info = {
                 "id": doc_id,
@@ -351,8 +262,9 @@ class KnowledgeBaseManager:
             # 策略：向量库获取更多结果，然后用后处理器精选
             retrieval_top_k = max(top_k * settings.RETRIEVAL_FETCH_MULTIPLIER, 15)
 
-            results = self.vector_store.search(
+            results = self.vector_manager.search(
                 query_embedding=query_embedding,
+                kb_id=kb_id,
                 top_k=retrieval_top_k,
             )
 
@@ -447,54 +359,29 @@ class KnowledgeBaseManager:
             logger.info(f"开始删除知识库: {kb_id}")
 
             # 步骤 1: 获取知识库中的所有文档信息（包括临时文件和分块文件路径）
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            kb_info = self.kb_store.get_kb(kb_id)
+            if not kb_info:
+                logger.error(f"知识库不存在: {kb_id}")
+                return False
 
-            try:
-                # 获取知识库中的所有文档信息
-                cursor.execute("""
-                    SELECT id, temp_path FROM documents WHERE kb_id = ?
-                """, (kb_id,))
-                docs_info = cursor.fetchall()
-                logger.info(f"知识库包含 {len(docs_info)} 个文档")
-            finally:
-                conn.close()
+            # 获取知识库中的所有文档
+            docs_info = self.kb_store.db.doc_repo.get_documents_by_kb(kb_id)
+            logger.info(f"知识库包含 {len(docs_info)} 个文档")
 
-            # 步骤 2: 从 SQLite 数据库删除知识库相关的所有数据（使用事务保证一致性）
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            try:
-                conn.execute("BEGIN TRANSACTION")
-
-                # 删除文本块
-                cursor.execute("DELETE FROM text_chunks WHERE kb_id = ?", (kb_id,))
-                chunks_deleted = cursor.rowcount
-                logger.info(f"已删除 {chunks_deleted} 个文本分块")
-
-                # 删除文档
-                cursor.execute("DELETE FROM documents WHERE kb_id = ?", (kb_id,))
-                docs_deleted = cursor.rowcount
-                logger.info(f"已删除 {docs_deleted} 个文档记录")
-
-                # 删除知识库
-                cursor.execute("DELETE FROM knowledge_bases WHERE id = ?", (kb_id,))
-                kb_deleted = cursor.rowcount
-                logger.info(f"已删除知识库记录")
-
-                conn.commit()
-                logger.info("数据库事务提交成功")
-            except Exception as e:
-                conn.rollback()
-                logger.error(f"数据库事务回滚: {e}")
-                raise
-            finally:
-                conn.close()
+            # 步骤 2: 从数据库删除知识库（KBStore 会级联删除关联数据）
+            if self.kb_store.delete_kb(kb_id):
+                logger.info("数据库中的知识库已删除")
+                chunks_deleted = len([d for d in docs_info])  # 估计删除数量
+                docs_deleted = len(docs_info)
+            else:
+                logger.error("数据库删除失败")
+                return False
 
             # 步骤 3: 从向量数据库删除知识库的所有向量数据
             vector_deleted_count = 0
             try:
-                if hasattr(self, 'vector_store') and self.vector_store:
-                    vector_deleted_count = self.vector_store.delete_knowledge_base_vectors(kb_id)
+                if hasattr(self, 'vector_manager') and self.vector_manager:
+                    vector_deleted_count = self.vector_manager.delete_knowledge_base_vectors(kb_id)
                     logger.info(f"向量数据库中已删除 {vector_deleted_count} 个向量")
             except Exception as e:
                 logger.warning(f"删除向量数据失败（可能数据库不存在或已清空）: {e}")
@@ -502,7 +389,8 @@ class KnowledgeBaseManager:
             # 步骤 4: 删除临时文件（上传的原始文档）
             temp_files_deleted = 0
             try:
-                for doc_id, temp_path in docs_info:
+                for doc_info in docs_info:
+                    temp_path = doc_info.get('temp_path') or doc_info.get('path')
                     if temp_path and os.path.exists(temp_path):
                         os.remove(temp_path)
                         temp_files_deleted += 1
@@ -525,8 +413,9 @@ class KnowledgeBaseManager:
 
                         # 尝试从文件元数据或内容识别属于该知识库的文件
                         # 简单方案：删除该知识库内所有文档对应的分块
-                        for doc_id, _ in docs_info:
-                            if doc_id in filename:
+                        for doc in docs_info:
+                            doc_id = doc.get('id')
+                            if doc_id and doc_id in filename:
                                 try:
                                     os.remove(file_path)
                                     chunks_files_deleted += 1
@@ -572,63 +461,60 @@ class KnowledgeBaseManager:
             logger.info(f"开始删除文档: {doc_id}")
 
             # 步骤 1: 检查文档是否存在并获取相关信息
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            docs = self.kb_store.db.doc_repo.get_documents_by_id(doc_id)
+            if not docs or len(docs) == 0:
+                logger.error(f"文档不存在: {doc_id}")
+                return False
+
+            doc_info = docs[0]
+            kb_id = doc_info.get('kb_id')
+            filename = doc_info.get('filename')
+            temp_path = doc_info.get('temp_path') or doc_info.get('path')
+            logger.info(f"找到文档: {filename} (kb_id: {kb_id})")
+
+            # 步骤 2: 从数据库删除文档及其关联数据
+            # 首先获取分块数量用于统计
+            chunks_info = self.kb_store.db.chunk_repo.get_chunks_by_doc(doc_id) if hasattr(self.kb_store.db, 'chunk_repo') else []
+            chunks_deleted = len(chunks_info)
+
+            # 删除文档（KBStore 会级联删除关联的分块）
+            # TODO: 需要实现 delete_document 方法在 DocumentRepository
+            # 暂时使用直接 SQL 删除
             try:
-                cursor.execute("""
-                    SELECT id, kb_id, filename, temp_path FROM documents WHERE id = ?
-                """, (doc_id,))
-                doc_info = cursor.fetchone()
-                if not doc_info:
-                    logger.error(f"文档不存在: {doc_id}")
-                    return False
+                with self.kb_store.db.session() as conn:
+                    cursor = conn.cursor()
+                    # 删除文本块
+                    cursor.execute("DELETE FROM text_chunks WHERE document_id = ?", (doc_id,))
+                    chunks_deleted = cursor.rowcount
+                    logger.info(f"已删除 {chunks_deleted} 个文本分块")
 
-                doc_id, kb_id, filename, temp_path = doc_info
-                logger.info(f"找到文档: {filename} (kb_id: {kb_id})")
-            finally:
-                conn.close()
+                    # 删除文档本身
+                    cursor.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+                    docs_deleted = cursor.rowcount
+                    logger.info(f"已删除文档记录")
 
-            # 步骤 2: 从 SQLite 数据库删除文档相关的所有数据（使用事务保证一致性）
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            try:
-                conn.execute("BEGIN TRANSACTION")
+                    # 更新知识库统计信息
+                    cursor.execute("""
+                        UPDATE knowledge_bases
+                        SET document_count = document_count - 1,
+                            total_chunks = (
+                                SELECT COUNT(*) FROM text_chunks WHERE kb_id = ?
+                            ),
+                            updated_at = ?
+                        WHERE id = ?
+                    """, (kb_id, datetime.now().isoformat(), kb_id))
 
-                # 删除文本块
-                cursor.execute("DELETE FROM text_chunks WHERE document_id = ?", (doc_id,))
-                chunks_deleted = cursor.rowcount
-                logger.info(f"已删除 {chunks_deleted} 个文本分块")
-
-                # 删除文档本身
-                cursor.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
-                docs_deleted = cursor.rowcount
-                logger.info(f"已删除文档记录")
-
-                # 更新知识库统计信息
-                cursor.execute("""
-                    UPDATE knowledge_bases
-                    SET document_count = document_count - 1,
-                        total_chunks = (
-                            SELECT COUNT(*) FROM text_chunks WHERE kb_id = ?
-                        ),
-                        updated_at = ?
-                    WHERE id = ?
-                """, (kb_id, datetime.now().isoformat(), kb_id))
-
-                conn.commit()
-                logger.info("数据库事务提交成功")
+                    conn.commit()
+                    logger.info("数据库事务提交成功")
             except Exception as e:
-                conn.rollback()
-                logger.error(f"数据库事务回滚: {e}")
+                logger.error(f"数据库删除失败: {e}")
                 raise
-            finally:
-                conn.close()
 
             # 步骤 3: 从向量数据库删除文档的所有向量数据
             vector_deleted = False
             try:
-                if hasattr(self, 'vector_store') and self.vector_store:
-                    self.vector_store.delete_document(doc_id)
+                if hasattr(self, 'vector_manager') and self.vector_manager:
+                    self.vector_manager.delete_vectors([doc_id])
                     vector_deleted = True
                     logger.info(f"向量数据库中已删除该文档的向量")
             except Exception as e:
@@ -692,14 +578,8 @@ class KnowledgeBaseManager:
             是否存在
         """
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            try:
-                cursor.execute("SELECT id FROM knowledge_bases WHERE id = ?", (kb_id,))
-                result = cursor.fetchone()
-                return result is not None
-            finally:
-                conn.close()
+            kb_info = self.kb_store.get_kb(kb_id)
+            return kb_info is not None
         except Exception as e:
             logger.error(f"检查知识库是否存在失败: {e}")
             return False
@@ -712,27 +592,40 @@ class KnowledgeBaseManager:
             知识库列表
         """
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            try:
-                cursor.execute("SELECT * FROM knowledge_bases ORDER BY created_at DESC")
-                rows = cursor.fetchall()
-
-                kbs = []
-                for row in rows:
-                    kbs.append({
-                        "id": row[0],
-                        "name": row[1],
-                        "description": row[2],
-                        "tags": row[3].split(",") if row[3] else [],
-                        "created_at": row[4],
-                        "updated_at": row[5],
-                        "document_count": row[6],
-                        "total_chunks": row[7]
-                    })
-                return kbs
-            finally:
-                conn.close()
+            return self.kb_store.list_kbs()
         except Exception as e:
             logger.error(f"获取知识库列表失败: {e}")
+            return []
+
+    def get_kb_documents(self, kb_id: str) -> List[Dict[str, Any]]:
+        """
+        获取知识库中的所有文档列表
+
+        Args:
+            kb_id: 知识库 ID
+
+        Returns:
+            文档列表，每个文档包含 id, filename, chunk_count, created_at, temp_path 等信息
+        """
+        try:
+            # 使用数据库连接直接查询文档信息
+            with self.kb_store.db.session() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT id, filename, chunk_count, created_at FROM documents WHERE kb_id = ? ORDER BY created_at DESC",
+                    (kb_id,)
+                )
+                rows = cursor.fetchall()
+
+                documents = []
+                for row in rows:
+                    documents.append({
+                        "id": row[0],
+                        "filename": row[1],
+                        "chunk_count": row[2],
+                        "created_at": row[3],
+                    })
+                return documents
+        except Exception as e:
+            logger.error(f"获取文档列表失败: {e}")
             return []

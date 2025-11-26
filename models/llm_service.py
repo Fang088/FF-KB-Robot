@@ -139,7 +139,8 @@ class LLMService:
                 stream=True,
             )
             for chunk in stream:
-                if chunk.choices[0].delta.content:
+                # 安全检查: choices 列表可能为空
+                if chunk.choices and len(chunk.choices) > 0 and chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     if on_chunk:
                         on_chunk(content)
@@ -186,7 +187,8 @@ class LLMService:
                 stream=True,
             )
             async for chunk in stream:
-                if chunk.choices[0].delta.content:
+                # 安全检查: choices 列表可能为空
+                if chunk.choices and len(chunk.choices) > 0 and chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     if on_chunk:
                         on_chunk(content)

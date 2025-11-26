@@ -19,9 +19,9 @@ class Settings(BaseSettings):
     PROJECT_VERSION: str = "0.1.0"
     PROJECT_ROOT: Path = Path(__file__).parent.parent
 
-    # 数据库配置
+    # 数据库配置 - 使用绝对路径确保隔离
     DATABASE_URL: str = "sqlite:///./db/sql_db/kbrobot.db"
-    VECTOR_STORE_PATH: str = "./db/vector_store"
+    VECTOR_STORE_PATH: str = ""  # 在 __init__ 中动态设置为绝对路径
 
     # LLM 配置（使用 302.ai API - OpenAI 兼容接口）
     LLM_PROVIDER: str = "openai"  # 302.ai 使用 OpenAI 兼容接口
@@ -42,8 +42,10 @@ class Settings(BaseSettings):
     VECTOR_STORE_TYPE: str = "hnsw"  # 仅支持 hnsw
     VECTOR_STORE_COLLECTION_NAME: str = "ff_kb_documents"
 
-    # HNSW 索引配置
-    HNSW_INDEX_PATH: str = "./db/vector_store/hnsw_index"  # HNSW 索引文件路径
+    # HNSW 索引配置 - 使用绝对路径确保隔离
+    # 注意: HNSW_INDEX_PATH 与 VECTOR_STORE_PATH 指向同一目录
+    # HNSW 的索引文件 (hnsw.bin, metadata.json) 存储在这里
+    HNSW_INDEX_PATH: str = ""  # 在 __init__ 中动态设置为绝对路径，与 VECTOR_STORE_PATH 相同
     HNSW_MAX_ELEMENTS: int = 1000000  # 最大元素数
     HNSW_EF_CONSTRUCTION: int = 200  # 构建时搜索扩展参数（越大精度越高，速度越慢）
     HNSW_EF_SEARCH: int = 100  # 搜索时扩展参数（越大精度越高，速度越慢） - 已提升以支持更好的搜索质量
@@ -63,9 +65,9 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "./logs/ff_kb_robot.log"
 
-    # 临时文件配置
-    TEMP_UPLOAD_PATH: str = "D:\\VsCodePyProject\\LLMAPP\\FF-KB-Robot\\data\\temp_uploads"
-    PROCESSED_CHUNKS_PATH: str = "D:\\VsCodePyProject\\LLMAPP\\FF-KB-Robot\\data\\temp_uploads"
+    # 临时文件配置 - 使用绝对路径确保隔离
+    TEMP_UPLOAD_PATH: str = ""  # 在 __init__ 中动态设置为绝对路径
+    PROCESSED_CHUNKS_PATH: str = ""  # 在 __init__ 中动态设置为绝对路径
 
     # ==================== 检索优化配置 ====================
     # 相似度过滤阈值（< 此值的结果会被过滤）
@@ -123,6 +125,42 @@ class Settings(BaseSettings):
         case_sensitive=True,  # 配置项区分大小写
         extra="ignore"  # 忽略配置文件中未定义的配置项
     )
+
+    def __init__(self, **data):
+        """初始化配置，设置动态路径"""
+        super().__init__(**data)
+
+        # 确保 PROJECT_ROOT 是绝对路径
+        if not self.PROJECT_ROOT.is_absolute():
+            self.PROJECT_ROOT = self.PROJECT_ROOT.resolve()
+
+        # 动态设置所有路径为绝对路径（基于 PROJECT_ROOT）
+        # 向量存储路径
+        if not self.VECTOR_STORE_PATH or self.VECTOR_STORE_PATH == "":
+            self.VECTOR_STORE_PATH = str(self.PROJECT_ROOT / "db" / "vector_store")
+
+        # HNSW 索引路径 - 与 VECTOR_STORE_PATH 相同
+        # HNSW 的索引文件 (hnsw.bin, metadata.json) 直接存储在这个目录下
+        if not self.HNSW_INDEX_PATH or self.HNSW_INDEX_PATH == "":
+            self.HNSW_INDEX_PATH = self.VECTOR_STORE_PATH
+
+        # 临时上传路径
+        if not self.TEMP_UPLOAD_PATH or self.TEMP_UPLOAD_PATH == "":
+            self.TEMP_UPLOAD_PATH = str(self.PROJECT_ROOT / "data" / "temp_uploads")
+
+        # 处理后的分块路径
+        if not self.PROCESSED_CHUNKS_PATH or self.PROCESSED_CHUNKS_PATH == "":
+            self.PROCESSED_CHUNKS_PATH = str(self.PROJECT_ROOT / "data" / "processed_chunks")
+
+        # 日志路径 - 转换为绝对路径
+        if self.LOG_FILE and not Path(self.LOG_FILE).is_absolute():
+            self.LOG_FILE = str(self.PROJECT_ROOT / self.LOG_FILE)
+
+        # 创建所有必要的目录
+        Path(self.VECTOR_STORE_PATH).mkdir(parents=True, exist_ok=True)
+        Path(self.TEMP_UPLOAD_PATH).mkdir(parents=True, exist_ok=True)
+        Path(self.PROCESSED_CHUNKS_PATH).mkdir(parents=True, exist_ok=True)
+        Path(self.LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
 
     def get_project_root(self) -> Path:
         """获取项目根目录"""
