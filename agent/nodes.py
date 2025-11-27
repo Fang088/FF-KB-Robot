@@ -192,10 +192,8 @@ async def process_tool_calls(state: AgentState) -> Dict[str, Any]:
     try:
         state.add_intermediate_step("开始处理工具调用...")
 
-        # TODO: 实现工具调用的执行逻辑
-        # 支持的工具：
-        # - search_tool: 外部搜索
-        # - custom_tool: 自定义工具
+        # 注：工具调用功能未在当前版本实现
+        # 当前版本仅支持基于检索增强生成 (RAG) 的问答
 
         state.add_intermediate_step(f"完成 {len(state.tool_calls)} 个工具调用")
 

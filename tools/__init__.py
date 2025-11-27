@@ -1,11 +1,8 @@
 """
-Tools 模块 - 外部工具集成
+Tools 模块 - 外部工具集成（保留）
+
+注：当前工具模块未在项目中使用，仅作为未来扩展预留。
+如需启用工具功能，可在此导入相关工具类。
 """
 
-from .search_tool import SearchTool
-from .custom_tool import CustomTool
-
-__all__ = [
-    "SearchTool",
-    "CustomTool"
-]
+__all__ = []

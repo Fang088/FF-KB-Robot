@@ -7,10 +7,9 @@ Retrieval 模块 - 文档检索和知识库管理
 3. TextChunker - 智能文本分块
 4. VectorStoreClient - 向量存储客户端
 5. HNSWVectorStore - HNSW 向量索引
-6. SimpleRetriever - 简单检索器
-7. KBStore - 知识库仓储层
-8. VectorManager - 向量管理器
-9. RetrievalPostProcessor - 检索结果后处理
+6. KBStore - 知识库仓储层
+7. VectorManager - 向量管理器
+8. RetrievalPostProcessor - 检索结果后处理
 
 快速开始：
     from retrieval import KnowledgeBaseManager
@@ -25,7 +24,6 @@ from .text_chunker import TextChunker
 from .vector_store_client import VectorStoreClient
 from .knowledge_base_manager import KnowledgeBaseManager
 from .hnsw_vector_store import HNSWVectorStore
-from .simple_retriever import SimpleRetriever
 from .kb_store import KBStore
 from .vector_manager import VectorManager
 from .retrieval_postprocessor import RetrievalPostProcessor
@@ -36,7 +34,6 @@ __all__ = [
     "VectorStoreClient",
     "KnowledgeBaseManager",
     "HNSWVectorStore",
-    "SimpleRetriever",
     "KBStore",
     "VectorManager",
     "RetrievalPostProcessor",
