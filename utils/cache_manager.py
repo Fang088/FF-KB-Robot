@@ -33,10 +33,12 @@ T = TypeVar('T')
 
 
 class CacheLevel(str, Enum):
-    """缓存层级"""
+    """缓存层级 - 统一定义"""
     EMBEDDING = "embedding"
     QUERY_RESULT = "query_result"
     RETRIEVAL_CLASS = "retrieval_class"
+    RETRIEVAL = "retrieval"
+    DOCUMENT = "document"
 
 
 @dataclass

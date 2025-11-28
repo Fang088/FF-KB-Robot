@@ -242,27 +242,6 @@ class KBRobotCLI:
             logger.error(f"删除文档失败: {e}")
             print(f"✗ 删除失败: {e}")
 
-    async def query_kb(self, kb_id: str, question: str):
-        """
-        直接查询知识库（支持流式显示）
-
-        Args:
-            kb_id: 知识库 ID
-            question: 问题
-        """
-        try:
-            result = await self.agent.execute_query(
-                kb_id=kb_id,
-                question=question,
-                top_k=5,
-                use_tools=False,
-            )
-            self._print_result(result)
-
-        except Exception as e:
-            logger.error(f"查询失败: {e}")
-            print(f"❌ 查询失败: {e}")
-
     @staticmethod
     def _print_result(result):
         """
