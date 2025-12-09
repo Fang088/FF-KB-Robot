@@ -285,14 +285,15 @@ class QueryService:
         """
         try:
             stats = self.query_cache.get_stats()
+            stats_dict = stats.to_dict()  # 转换 CacheStats 对象为字典
 
             return {
                 "success": True,
                 "data": {
-                    "hit_rate": stats.get("hit_rate", "0.0%"),
-                    "total_requests": stats.get("total_requests", 0),
-                    "cache_hits": stats.get("cache_hits", 0),
-                    "cache_misses": stats.get("cache_misses", 0)
+                    "hit_rate": stats_dict.get("hit_rate", "0.0%"),
+                    "total_requests": stats_dict.get("total_requests", 0),
+                    "cache_hits": stats_dict.get("cache_hits", 0),
+                    "cache_misses": stats_dict.get("cache_misses", 0)
                 },
                 "message": "获取缓存统计成功"
             }
