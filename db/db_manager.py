@@ -235,8 +235,8 @@ class DocumentRepository:
         """
         self.db = db
 
-    def get_document_by_id(self, doc_id: int) -> Optional[Dict[str, Any]]:
-        """获取指定ID的文档"""
+    def get_document_by_id(self, doc_id: str) -> Optional[Dict[str, Any]]:
+        """获取指定ID的文档（ID为字符串类型）"""
         try:
             result = self.db.execute_query(
                 "SELECT id, kb_id, filename, file_path, chunk_count, created_at "
@@ -250,8 +250,8 @@ class DocumentRepository:
             logger.error(f"获取文档失败 (ID: {doc_id}): {str(e)}")
             raise
 
-    def get_documents_by_kb(self, kb_id: int) -> List[Dict[str, Any]]:
-        """获取知识库内的所有文档"""
+    def get_documents_by_kb(self, kb_id: str) -> List[Dict[str, Any]]:
+        """获取知识库内的所有文档（KB_ID为字符串类型）"""
         try:
             results = self.db.execute_query(
                 "SELECT id, kb_id, filename, file_path, chunk_count, created_at "
@@ -265,26 +265,26 @@ class DocumentRepository:
 
     def save_document(
         self,
-        kb_id: int,
+        doc_id: str,
+        kb_id: str,
         filename: str,
         file_path: str,
         chunk_count: int
-    ) -> int:
-        """保存新文档记录"""
+    ) -> str:
+        """保存新文档记录（所有ID为字符串类型）"""
         try:
             self.db.execute_update(
-                "INSERT INTO documents (kb_id, filename, file_path, chunk_count, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (kb_id, filename, file_path, chunk_count, datetime.now().isoformat())
+                "INSERT INTO documents (id, kb_id, filename, file_path, chunk_count, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (doc_id, kb_id, filename, file_path, chunk_count, datetime.now().isoformat())
             )
-            result = self.db.execute_query("SELECT last_insert_rowid() as id")
-            return result[0][0] if result else 0
+            return doc_id
         except DatabaseError as e:
             logger.error(f"保存文档失败 ({filename}): {str(e)}")
             raise
 
-    def delete_document(self, doc_id: int) -> int:
-        """删除文档记录"""
+    def delete_document(self, doc_id: str) -> int:
+        """删除文档记录（ID为字符串类型）"""
         try:
             return self.db.execute_update(
                 "DELETE FROM documents WHERE id = ?",
@@ -294,8 +294,8 @@ class DocumentRepository:
             logger.error(f"删除文档失败 (ID: {doc_id}): {str(e)}")
             raise
 
-    def update_document_chunks(self, doc_id: int, chunk_count: int) -> int:
-        """更新文档的文本块数量"""
+    def update_document_chunks(self, doc_id: str, chunk_count: int) -> int:
+        """更新文档的文本块数量（ID为字符串类型）"""
         try:
             return self.db.execute_update(
                 "UPDATE documents SET chunk_count = ? WHERE id = ?",
@@ -320,25 +320,24 @@ class KBRepository:
         """
         self.db = db
 
-    def create_knowledge_base(self, name: str, description: str = "") -> int:
-        """创建新的知识库"""
+    def create_knowledge_base(self, kb_id: str, name: str, description: str = "", tags: str = "") -> str:
+        """创建新的知识库（ID为字符串类型UUID）"""
         try:
             self.db.execute_update(
-                "INSERT INTO knowledge_bases (name, description, created_at) "
-                "VALUES (?, ?, ?)",
-                (name, description, datetime.now().isoformat())
+                "INSERT INTO knowledge_bases (id, name, description, tags, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (kb_id, name, description, tags, datetime.now().isoformat())
             )
-            result = self.db.execute_query("SELECT last_insert_rowid() as id")
-            return result[0][0] if result else 0
+            return kb_id
         except DatabaseError as e:
             logger.error(f"创建知识库失败 ({name}): {str(e)}")
             raise
 
-    def get_knowledge_base(self, kb_id: int) -> Optional[Dict[str, Any]]:
-        """获取知识库信息"""
+    def get_knowledge_base(self, kb_id: str) -> Optional[Dict[str, Any]]:
+        """获取知识库信息（ID为字符串类型）"""
         try:
             result = self.db.execute_query(
-                "SELECT id, name, description, created_at FROM knowledge_bases WHERE id = ?",
+                "SELECT id, name, description, tags, created_at FROM knowledge_bases WHERE id = ?",
                 (kb_id,)
             )
             if result:
@@ -352,16 +351,16 @@ class KBRepository:
         """列出所有知识库"""
         try:
             results = self.db.execute_query(
-                "SELECT id, name, description, created_at "
+                "SELECT id, name, description, tags, created_at "
                 "FROM knowledge_bases ORDER BY created_at DESC"
             )
             return [dict(row) for row in results]
         except DatabaseError as e:
-            logger.error(f"列出知识库失败: {str(e)}")
+            logger.error(f"���出知识库失败: {str(e)}")
             raise
 
-    def delete_knowledge_base(self, kb_id: int) -> int:
-        """删除知识库"""
+    def delete_knowledge_base(self, kb_id: str) -> int:
+        """删除知识库（ID为字符串类型）"""
         try:
             return self.db.execute_update(
                 "DELETE FROM knowledge_bases WHERE id = ?",
@@ -371,8 +370,8 @@ class KBRepository:
             logger.error(f"删除知识库失败 (ID: {kb_id}): {str(e)}")
             raise
 
-    def get_kb_stats(self, kb_id: int) -> Dict[str, Any]:
-        """获取知识库统计信息"""
+    def get_kb_stats(self, kb_id: str) -> Dict[str, Any]:
+        """获取知识库统计信息（ID为字符串类型）"""
         try:
             kb_info = self.get_knowledge_base(kb_id)
             if not kb_info:

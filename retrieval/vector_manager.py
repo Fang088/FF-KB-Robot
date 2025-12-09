@@ -172,6 +172,28 @@ class VectorManager:
             logger.error(f"删除向量失败: {e}")
             raise
 
+    def delete_document(self, doc_id: str) -> bool:
+        """
+        删除单个文档的向量数据
+
+        注意：向量存储中存储的是 chunk_id，但元数据中包含 doc_id
+        因此使用元数据过滤来删除所有属于该 doc_id 的向量
+
+        Args:
+            doc_id: 文档ID
+
+        Returns:
+            是否删除成功（只要删除了至少一个向量就算成功）
+        """
+        try:
+            # 使用元数据过滤删除所有 doc_id 匹配的向量
+            deleted_count = self.vector_store.delete_documents_by_metadata({"doc_id": doc_id})
+            logger.debug(f"删除文档 {doc_id} 的向量数据: {deleted_count} 个向量")
+            return deleted_count > 0
+        except Exception as e:
+            logger.error(f"删除文档向量失败: {e}")
+            return False
+
     def delete_knowledge_base_vectors(self, kb_id: str) -> int:
         """
         删除知识库的所有向量数据

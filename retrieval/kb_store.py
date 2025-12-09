@@ -128,7 +128,8 @@ class KBStore:
     ) -> bool:
         """添加文档记录到知识库"""
         try:
-            self.doc_repo.save_document(kb_id, filename, file_path, chunk_count)
+            # 保存文档，传递完整参数包括 doc_id
+            self.doc_repo.save_document(doc_id, kb_id, filename, file_path, chunk_count)
 
             # 更新知识库统计
             now = datetime.now()

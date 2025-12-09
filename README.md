@@ -1,4 +1,4 @@
-# 🐱 FF-KB-Robot 知识库机器人
+# 🤖 FF-KB-Robot 知识库问答系统
 
 **生产级 RAG 知识库系统，提供高性能智能问答和文档分析能力。**
 
@@ -449,6 +449,6 @@ python main.py -kb kb_001 -q "问题"  # 直接查询
 
 **💬 有问题或建议**？查看 `logs/app.log` 或提交 Issue
 
-Made with 🐱 by FF-KB-Robot Team | Powered by LangGraph + HNSW
+Made with ❤️ by FF-KB-Robot Team | Powered by LangGraph + HNSW
 
 </div>

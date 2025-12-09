@@ -143,13 +143,13 @@ class KnowledgeBaseManager:
                 logger.info(f"原始文件已保存到临时目录: {temp_file_path}")
 
             # 处理文档
-            chunks = self.doc_processor.process_document(file_path, save_chunks=save_chunks)
+            doc_id = str(uuid.uuid4())
+            chunks = self.doc_processor.process_document(file_path, save_chunks=save_chunks, doc_id=doc_id)
 
             # 生成嵌入
             embeddings = self.embedding_service.embed_texts(chunks)
 
             # 准备元数据
-            doc_id = str(uuid.uuid4())
             created_at = datetime.now()
 
             # 上传到向量数据库
@@ -365,7 +365,7 @@ class KnowledgeBaseManager:
                 return False
 
             # 获取知识库中的所有文档
-            docs_info = self.kb_store.db.doc_repo.get_documents_by_kb(kb_id)
+            docs_info = self.kb_store.doc_repo.get_documents_by_kb(kb_id)
             logger.info(f"知识库包含 {len(docs_info)} 个文档")
 
             # 步骤 2: 从数据库删除知识库（KBStore 会级联删除关联数据）
@@ -461,25 +461,18 @@ class KnowledgeBaseManager:
             logger.info(f"开始删除文档: {doc_id}")
 
             # 步骤 1: 检查文档是否存在并获取相关信息
-            docs = self.kb_store.db.doc_repo.get_documents_by_id(doc_id)
-            if not docs or len(docs) == 0:
+            doc_info = self.kb_store.doc_repo.get_document_by_id(doc_id)
+            if not doc_info:
                 logger.error(f"文档不存在: {doc_id}")
                 return False
 
-            doc_info = docs[0]
             kb_id = doc_info.get('kb_id')
             filename = doc_info.get('filename')
-            temp_path = doc_info.get('temp_path') or doc_info.get('path')
+            temp_path = doc_info.get('temp_path') or doc_info.get('file_path')
             logger.info(f"找到文档: {filename} (kb_id: {kb_id})")
 
             # 步骤 2: 从数据库删除文档及其关联数据
-            # 首先获取分块数量用于统计
-            chunks_info = self.kb_store.db.chunk_repo.get_chunks_by_doc(doc_id) if hasattr(self.kb_store.db, 'chunk_repo') else []
-            chunks_deleted = len(chunks_info)
-
-            # 删除文档（KBStore 会级联删除关联的分块）
-            # TODO: 需要实现 delete_document 方法在 DocumentRepository
-            # 暂时使用直接 SQL 删除
+            # 删除文档（会级联删除关联的分块）
             try:
                 with self.kb_store.db.session() as conn:
                     cursor = conn.cursor()
@@ -511,12 +504,15 @@ class KnowledgeBaseManager:
                 raise
 
             # 步骤 3: 从向量数据库删除文档的所有向量数据
-            vector_deleted = False
+            vector_deleted = 0
             try:
                 if hasattr(self, 'vector_manager') and self.vector_manager:
-                    self.vector_manager.delete_vectors([doc_id])
-                    vector_deleted = True
-                    logger.info(f"向量数据库中已删除该文档的向量")
+                    # 使用 delete_document 方法删除单个文档的向量（基于元数据过滤）
+                    vector_deleted = self.vector_manager.delete_document(doc_id)
+                    if vector_deleted > 0:
+                        logger.info(f"向量数据库中已删除文档 {doc_id} 的 {vector_deleted} 个向量")
+                    else:
+                        logger.info(f"向量数据库中未找到文档 {doc_id} 的向量（可能已被删除）")
             except Exception as e:
                 logger.warning(f"删除向量数据失败（可能数据库不存在）: {e}")
 
@@ -557,7 +553,7 @@ class KnowledgeBaseManager:
             logger.info(f"""
 文档删除完成 (ID: {doc_id}, 文件名: {filename})
 - 数据库记录: ✓ ({chunks_deleted} 个分块 + 1 个文档)
-- 向量数据: ✓ ({vector_deleted})
+- 向量数据: ✓ ({vector_deleted} 个向量)
 - 临时文件: ✓ ({temp_file_deleted})
 - 分块文件: ✓ ({chunks_files_deleted} 个文件)
             """)

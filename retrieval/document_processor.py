@@ -5,6 +5,7 @@
 
 from typing import List, Optional, Dict, Any
 import logging
+from datetime import datetime
 from .text_chunker import TextChunker
 
 logger = logging.getLogger(__name__)
@@ -158,13 +159,14 @@ class DocumentProcessor:
 
         return chunks
 
-    def process_document(self, file_path: str, save_chunks: bool = False) -> List[str]:
+    def process_document(self, file_path: str, save_chunks: bool = False, doc_id: str = None) -> List[str]:
         """
         处理文档（加载 -> 清洗 -> 分块）
 
         Args:
             file_path: 文档文件路径
             save_chunks: 是否保存处理后的分块到processed_chunks目录
+            doc_id: 文档ID（可选，如果有则使用此ID命名分块文件）
 
         Returns:
             文本分块列表
@@ -183,18 +185,21 @@ class DocumentProcessor:
             if save_chunks:
                 from config.settings import settings
                 import os
-                import uuid
 
                 # 确保目录存在
                 os.makedirs(settings.PROCESSED_CHUNKS_PATH, exist_ok=True)
 
-                # 生成唯一的文件标识
-                file_id = str(uuid.uuid4())
+                # 使用时间戳作为文件名前缀，便于排序和识别
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = os.path.splitext(os.path.basename(file_path))[0]
+
+                # 使用 doc_id 作为文件标识，如果有的话；否则生成一个新的 UUID
+                file_identifier = doc_id if doc_id else str(uuid.uuid4())
 
                 # 保存分块
                 for i, chunk in enumerate(chunks):
-                    chunk_filename = f"{filename}_{file_id}_chunk_{i}.txt"
+                    # 分块文件名格式: {timestamp}_{filename}_{doc_id}_chunk_{index}.txt
+                    chunk_filename = f"{timestamp}_{filename}_{file_identifier}_chunk_{i}.txt"
                     chunk_path = os.path.join(settings.PROCESSED_CHUNKS_PATH, chunk_filename)
                     with open(chunk_path, "w", encoding="utf-8") as f:
                         f.write(chunk)

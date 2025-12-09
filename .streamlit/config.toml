@@ -1,0 +1,37 @@
+# Streamlit 配置文件
+# FF-KB-Robot Web UI 专用配置
+
+[theme]
+# 主题配置
+primaryColor = "#667eea"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f5f5f5"
+textColor = "#262730"
+font = "sans serif"
+
+[server]
+# 服务器配置
+port = 8501
+enableCORS = false
+enableXsrfProtection = false
+maxUploadSize = 200
+
+[browser]
+# 浏览器配置
+gatherUsageStats = false
+serverAddress = "localhost"
+serverPort = 8501
+
+[runner]
+# 运行器配置
+magicEnabled = true
+fastReruns = true
+
+[logger]
+# 日志配置
+level = "info"
+
+[client]
+# 客户端配置
+toolbarMode = "minimal"
+showErrorDetails = true
