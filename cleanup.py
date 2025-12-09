@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 FF-KB-Robot 数据清理脚本 - 全面清除所有数据和缓存
 
