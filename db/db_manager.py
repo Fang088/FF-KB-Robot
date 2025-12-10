@@ -60,7 +60,6 @@ class DBConnection:
         self._ensure_dir()
         if auto_init:
             self._initialize_tables()
-        logger.debug(f"数据库已初始化: {self.db_path}")
 
     def _ensure_dir(self):
         """确保数据库目录存在"""
@@ -115,8 +114,56 @@ class DBConnection:
                     )
                 """)
 
+                # 对话表 - 用于保存聊天对话
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS conversations (
+                        id TEXT PRIMARY KEY,
+                        kb_id TEXT NOT NULL,
+                        kb_name TEXT,
+                        title TEXT NOT NULL,
+                        created_at TIMESTAMP,
+                        updated_at TIMESTAMP,
+                        message_count INTEGER DEFAULT 0,
+                        FOREIGN KEY(kb_id) REFERENCES knowledge_bases(id)
+                    )
+                """)
+
+                # 对话消息表 - 存储具体的聊天消息
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS conversation_messages (
+                        id TEXT PRIMARY KEY,
+                        conversation_id TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        timestamp TIMESTAMP,
+                        confidence REAL,
+                        confidence_level TEXT,
+                        response_time_ms INTEGER,
+                        from_cache BOOLEAN,
+                        is_welcome BOOLEAN,
+                        error BOOLEAN,
+                        retrieved_docs TEXT,
+                        metadata TEXT,
+                        FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                    )
+                """)
+
+                # 为对话表和消息表创建索引
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_conversations_kb_id ON conversations(kb_id)
+                """)
+
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation_id
+                    ON conversation_messages(conversation_id)
+                """)
+
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_conversation_messages_timestamp
+                    ON conversation_messages(timestamp)
+                """)
+
                 conn.commit()
-                logger.debug("数据库表初始化完成")
             except sqlite3.Error as e:
                 logger.error(f"初始化表失败: {e}")
                 raise DatabaseError(f"初始化表失败: {str(e)}")
@@ -395,3 +442,239 @@ class KBRepository:
         except DatabaseError as e:
             logger.error(f"获取知识库统计失败 (ID: {kb_id}): {str(e)}")
             raise
+
+
+class ConversationRepository:
+    """
+    对话仓储 - 处理所有对话和消息相关的数据库操作
+    """
+
+    def __init__(self, db: DBConnection):
+        """
+        初始化对话仓储
+
+        Args:
+            db: DBConnection实例
+        """
+        self.db = db
+
+    def create_conversation(self, conv_id: str, kb_id: str, kb_name: str, title: str) -> str:
+        """创建新对话"""
+        try:
+            self.db.execute_update(
+                "INSERT INTO conversations (id, kb_id, kb_name, title, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (conv_id, kb_id, kb_name, title, datetime.now().isoformat(), datetime.now().isoformat())
+            )
+            return conv_id
+        except DatabaseError as e:
+            logger.error(f"创建对话失败 (ID: {conv_id}): {str(e)}")
+            raise
+
+    def get_conversation(self, conv_id: str) -> Optional[Dict[str, Any]]:
+        """获取对话信息"""
+        try:
+            result = self.db.execute_query(
+                "SELECT id, kb_id, kb_name, title, created_at, updated_at, message_count "
+                "FROM conversations WHERE id = ?",
+                (conv_id,)
+            )
+            if result:
+                return dict(result[0])
+            return None
+        except DatabaseError as e:
+            logger.error(f"获取对话失败 (ID: {conv_id}): {str(e)}")
+            raise
+
+    def list_conversations(self, kb_id: Optional[str] = None, limit: int = 1000) -> List[Dict[str, Any]]:
+        """列出所有对话（可按知识库过滤）"""
+        try:
+            if kb_id:
+                results = self.db.execute_query(
+                    "SELECT id, kb_id, kb_name, title, created_at, updated_at, message_count "
+                    "FROM conversations WHERE kb_id = ? ORDER BY created_at DESC LIMIT ?",
+                    (kb_id, limit)
+                )
+            else:
+                results = self.db.execute_query(
+                    "SELECT id, kb_id, kb_name, title, created_at, updated_at, message_count "
+                    "FROM conversations ORDER BY created_at DESC LIMIT ?",
+                    (limit,)
+                )
+
+            conversations = []
+            for row in results:
+                conv_dict = dict(row)
+                # 加载消息
+                conv_dict["messages"] = self.get_messages(conv_dict["id"])
+                conversations.append(conv_dict)
+
+            return conversations
+        except DatabaseError as e:
+            logger.error(f"列出对话失败: {str(e)}")
+            raise
+
+    def get_messages(self, conv_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """获取对话的所有消息"""
+        try:
+            if limit:
+                results = self.db.execute_query(
+                    "SELECT id, role, content, timestamp, confidence, confidence_level, "
+                    "response_time_ms, from_cache, is_welcome, error, retrieved_docs, metadata "
+                    "FROM conversation_messages WHERE conversation_id = ? "
+                    "ORDER BY timestamp ASC LIMIT ?",
+                    (conv_id, limit)
+                )
+            else:
+                results = self.db.execute_query(
+                    "SELECT id, role, content, timestamp, confidence, confidence_level, "
+                    "response_time_ms, from_cache, is_welcome, error, retrieved_docs, metadata "
+                    "FROM conversation_messages WHERE conversation_id = ? "
+                    "ORDER BY timestamp ASC",
+                    (conv_id,)
+                )
+
+            messages = []
+            for row in results:
+                msg_dict = dict(row)
+                # 反序列化 JSON 数据
+                if msg_dict.get("retrieved_docs"):
+                    try:
+                        import json
+                        msg_dict["retrieved_docs"] = json.loads(msg_dict["retrieved_docs"])
+                    except:
+                        msg_dict["retrieved_docs"] = []
+
+                if msg_dict.get("metadata"):
+                    try:
+                        import json
+                        msg_dict["metadata"] = json.loads(msg_dict["metadata"])
+                    except:
+                        msg_dict["metadata"] = {}
+
+                messages.append(msg_dict)
+
+            return messages
+        except DatabaseError as e:
+            logger.error(f"获取消息失败 (对话ID: {conv_id}): {str(e)}")
+            raise
+
+    def add_message(self, msg_id: str, conv_id: str, role: str, content: str, **kwargs) -> str:
+        """添加消息到对话"""
+        try:
+            import json
+
+            # 序列化复杂数据
+            retrieved_docs_json = None
+            metadata_json = None
+
+            if "retrieved_docs" in kwargs:
+                try:
+                    retrieved_docs_json = json.dumps(kwargs.pop("retrieved_docs", []))
+                except:
+                    retrieved_docs_json = None
+
+            if "metadata" in kwargs:
+                try:
+                    metadata_json = json.dumps(kwargs.pop("metadata", {}))
+                except:
+                    metadata_json = None
+
+            # 提取其他字段
+            confidence = kwargs.pop("confidence", None)
+            confidence_level = kwargs.pop("confidence_level", None)
+            response_time_ms = kwargs.pop("response_time_ms", None)
+            from_cache = kwargs.pop("from_cache", False)
+            is_welcome = kwargs.pop("is_welcome", False)
+            error = kwargs.pop("error", False)
+
+            self.db.execute_update(
+                "INSERT INTO conversation_messages "
+                "(id, conversation_id, role, content, timestamp, confidence, confidence_level, "
+                "response_time_ms, from_cache, is_welcome, error, retrieved_docs, metadata) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (msg_id, conv_id, role, content, datetime.now().isoformat(),
+                 confidence, confidence_level, response_time_ms, from_cache, is_welcome, error,
+                 retrieved_docs_json, metadata_json)
+            )
+
+            # 更新对话的消息计数
+            self.db.execute_update(
+                "UPDATE conversations SET message_count = message_count + 1, updated_at = ? WHERE id = ?",
+                (datetime.now().isoformat(), conv_id)
+            )
+
+            return msg_id
+        except DatabaseError as e:
+            logger.error(f"添加消息失败 (消息ID: {msg_id}): {str(e)}")
+            raise
+
+    def delete_conversation(self, conv_id: str) -> int:
+        """删除对话（级联删除消息）"""
+        try:
+            return self.db.execute_update(
+                "DELETE FROM conversations WHERE id = ?",
+                (conv_id,)
+            )
+        except DatabaseError as e:
+            logger.error(f"删除对话失败 (ID: {conv_id}): {str(e)}")
+            raise
+
+    def update_conversation_title(self, conv_id: str, new_title: str) -> bool:
+        """更新对话标题"""
+        try:
+            affected = self.db.execute_update(
+                "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
+                (new_title, datetime.now().isoformat(), conv_id)
+            )
+            return affected > 0
+        except DatabaseError as e:
+            logger.error(f"更新对话标题失败 (ID: {conv_id}): {str(e)}")
+            raise
+
+    def clear_messages(self, conv_id: str) -> int:
+        """清空对话消息"""
+        try:
+            result = self.db.execute_update(
+                "DELETE FROM conversation_messages WHERE conversation_id = ?",
+                (conv_id,)
+            )
+
+            # 重置消息计数
+            self.db.execute_update(
+                "UPDATE conversations SET message_count = 0 WHERE id = ?",
+                (conv_id,)
+            )
+
+            return result
+        except DatabaseError as e:
+            logger.error(f"清空消息失败 (对话ID: {conv_id}): {str(e)}")
+            raise
+
+    def get_conversation_stats(self, conv_id: str) -> Dict[str, Any]:
+        """获取对话统计信息"""
+        try:
+            conv_info = self.get_conversation(conv_id)
+            if not conv_info:
+                raise DatabaseError(f"对话不存在: {conv_id}")
+
+            msg_count = self.db.execute_query(
+                "SELECT COUNT(*) as count FROM conversation_messages WHERE conversation_id = ?",
+                (conv_id,)
+            )
+
+            count = dict(msg_count[0]).get("count", 0) if msg_count else 0
+
+            return {
+                "conv_id": conv_id,
+                "title": conv_info["title"],
+                "kb_id": conv_info["kb_id"],
+                "kb_name": conv_info["kb_name"],
+                "message_count": count,
+                "created_at": conv_info["created_at"],
+                "updated_at": conv_info["updated_at"]
+            }
+        except DatabaseError as e:
+            logger.error(f"获取对话统计失败 (ID: {conv_id}): {str(e)}")
+            raise
+

@@ -6,6 +6,7 @@
 2. 历史对话列表
 3. 对话切换
 4. 对话删除（可选）
+5. 对话持久化存储
 
 作者: FF-KB-Robot Team
 """
@@ -14,6 +15,80 @@ import streamlit as st
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import uuid
+import logging
+import time
+from pathlib import Path
+
+# 配置日志 - 只显示关键操作消息
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# 导入数据库模块
+from db.db_manager import DBConnection, ConversationRepository
+
+# 初始化数据库连接
+db = None
+conv_repo = None
+
+try:
+    # 从统一的配置模块导入数据库路径
+    try:
+        from config.db_config import DB_PATH
+    except ImportError:
+        # 备选方案：直接计算路径（向后兼容）
+        from pathlib import Path
+        DB_PATH = Path(__file__).parent.parent.parent / "db" / "sql_db" / "kbrobot.db"
+        logger.warning("无法导入 config.db_config，使用直接计算的路径")
+
+    db = DBConnection(str(DB_PATH), auto_init=True)
+    conv_repo = ConversationRepository(db)
+    logger.info("数据库连接初始化成功")
+
+except ImportError as e:
+    logger.error(f"导入错误: {e}")
+    import traceback
+    traceback.print_exc()
+except Exception as e:
+    logger.error(f"数据库初始化失败: {e}")
+    import traceback
+    traceback.print_exc()
+
+# 批量保存配置
+BATCH_SAVE_INTERVAL = 10  # 每 10 秒保存一次
+BATCH_SAVE_THRESHOLD = 20  # 或者当消息达到 20 条时保存
+
+
+class PersistenceManager:
+    """后台持久化管理器 - 定期批量保存消息"""
+
+    def __init__(self):
+        self.pending_messages = []  # 待保存的消息列表
+        self.dirty_conversations = set()  # 待保存的对话 ID
+        self.last_save_time = time.time()
+
+    def mark_dirty(self, conv_id: str, message: Dict = None):
+        """标记对话或消息为脏数据（需要保存）"""
+        self.dirty_conversations.add(conv_id)
+        if message:
+            self.pending_messages.append(message)
+
+    def should_save(self) -> bool:
+        """判断是否应该批量保存"""
+        elapsed = time.time() - self.last_save_time
+        msg_count = len(self.pending_messages)
+        return elapsed >= BATCH_SAVE_INTERVAL or msg_count >= BATCH_SAVE_THRESHOLD
+
+    def get_pending(self):
+        """获取待保存数据"""
+        msgs = self.pending_messages[:]
+        convs = self.dirty_conversations.copy()
+        return msgs, convs
+
+    def clear_pending(self):
+        """清空待保存数据"""
+        self.pending_messages.clear()
+        self.dirty_conversations.clear()
+        self.last_save_time = time.time()
 
 
 def manage_conversations() -> Optional[str]:
@@ -23,9 +98,28 @@ def manage_conversations() -> Optional[str]:
     Returns:
         当前选中的对话ID，如果没有则为None
     """
-    # 初始化对话列表
+    # 【调试信息】显示数据库连接状态
+    if conv_repo:
+        st.sidebar.success("✅ 数据库已连接")
+    else:
+        st.sidebar.error("❌ 数据库连接失败！")
+
+    # 初始化对话列表和持久化管理器
     if "conversations" not in st.session_state:
-        st.session_state.conversations = []
+        try:
+            # 从数据库加载所有对话（一次性加载）
+            if conv_repo:
+                db_convs = conv_repo.list_conversations()
+                st.session_state.conversations = db_convs if db_convs else []
+            else:
+                logger.error("数据库连接失败")
+                st.session_state.conversations = []
+            st.session_state.persistence_mgr = PersistenceManager()
+        except Exception as e:
+            logger.error(f"从数据库加载对话失败: {e}")
+            st.error(f"⚠️ 加载对话失败: {e}")
+            st.session_state.conversations = []
+            st.session_state.persistence_mgr = PersistenceManager()
 
     # 初始化当前对话ID
     if "current_conversation_id" not in st.session_state:
@@ -99,16 +193,29 @@ def create_new_conversation(kb_id: Optional[str] = None, kb_name: Optional[str] 
         "id": conv_id,
         "title": "新对话",
         "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
         "messages": [],
         "kb_id": kb_id,  # 关联的知识库ID
-        "kb_name": kb_name  # 知识库名称（用于显示）
+        "kb_name": kb_name,  # 知识库名称（用于显示）
+        "message_count": 0
     }
+
+    # 【新增】立即保存对话到数据库（对话是主体，必须保存）
+    try:
+        if conv_repo:
+            conv_repo.create_conversation(conv_id, kb_id, kb_name, "新对话")
+        else:
+            logger.warning("数据库连接不可用，对话不会被持久化")
+    except Exception as e:
+        logger.error(f"创建对话失败: {e}")
+        st.error(f"创建对话失败: {e}")
+        return
 
     st.session_state.conversations.append(new_conv)
     st.session_state.current_conversation_id = conv_id
 
     # 添加欢迎消息
-    welcome_msg = "你好！我是智能助手，有什么可以帮助你的吗？"
+    welcome_msg = "你好！我是智能助手，有什么可以帮���你的吗？"
     if kb_name:
         welcome_msg = f"你好！我是智能助手，正在使用知识库【{kb_name}】为您服务"
 
@@ -122,6 +229,16 @@ def switch_conversation(conv_id: str):
 
 def delete_conversation(conv_id: str):
     """删除对话"""
+    # 【新增】从数据库删除（立即执行，不延迟）
+    try:
+        if conv_repo:
+            conv_repo.delete_conversation(conv_id)
+        else:
+            logger.warning("数据库连接不可用，对话不会被删除")
+    except Exception as e:
+        logger.error(f"删除对话失败: {e}")
+
+    # 从 session_state 删除
     st.session_state.conversations = [
         conv for conv in st.session_state.conversations
         if conv["id"] != conv_id
@@ -179,6 +296,23 @@ def add_message(conv_id: str, role: str, content: str, **kwargs):
                 user_messages = [m for m in conv["messages"] if m["role"] == "user"]
                 if len(user_messages) == 1:  # 第一条用户消息
                     conv["title"] = content[:30] + ("..." if len(content) > 30 else "")
+
+            # 立即保存消息到数据库
+            try:
+                if conv_repo:
+                    conv_repo.add_message(
+                        msg_id,
+                        conv_id,
+                        role,
+                        content,
+                        **{k: v for k, v in kwargs.items()}
+                    )
+                else:
+                    logger.error("conv_repo 是 None，无法保存消息到数据库！")
+            except Exception as e:
+                logger.error(f"保存消息失败: {e}")
+                import traceback
+                traceback.print_exc()
 
             break
 
@@ -243,9 +377,20 @@ def update_conversation_title(conv_id: str, new_title: str) -> bool:
     Returns:
         是否修改成功
     """
+    # 【新增】更新数据库（立即保存）
+    try:
+        if conv_repo:
+            conv_repo.update_conversation_title(conv_id, new_title)
+        else:
+            logger.warning("数据���连接不可用，标题不会被持久化")
+    except Exception as e:
+        logger.error(f"更新标题失败: {e}")
+        return False
+
+    # 更新 session_state
     for conv in st.session_state.conversations:
         if conv["id"] == conv_id:
-            conv["title"] = new_title[:50] + ("..." if len(new_title) > 50 else "")  # 限制标题长度
+            conv["title"] = new_title[:50] + ("..." if len(new_title) > 50 else "")
             return True
     return False
 
@@ -264,3 +409,33 @@ def get_conversation_title(conv_id: str) -> Optional[str]:
         if conv["id"] == conv_id:
             return conv.get("title", "新对话")
     return None
+
+
+def _batch_save_to_db(persistence_mgr: PersistenceManager):
+    """
+    【辅助函数】批量保存待保存的消息到数据库
+
+    Args:
+        persistence_mgr: 持久化管理器实例
+    """
+    messages, _ = persistence_mgr.get_pending()
+
+    if messages and conv_repo:
+        try:
+            for msg in messages:
+                conv_id = msg.pop("conversation_id", None)
+                if conv_id:
+                    conv_repo.add_message(
+                        msg["id"],
+                        conv_id,
+                        msg["role"],
+                        msg["content"],
+                        **{k: v for k, v in msg.items()
+                           if k not in ["id", "role", "content", "conversation_id"]}
+                    )
+            persistence_mgr.clear_pending()
+        except Exception as e:
+            logger.error(f"批量保存消息失败: {e}")
+    elif not conv_repo:
+        logger.warning("数据库连接不可用，无法保存消息")
+

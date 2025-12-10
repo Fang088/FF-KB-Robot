@@ -7,6 +7,13 @@ from pydantic_settings import BaseSettings
 from pydantic import ConfigDict
 from pathlib import Path
 
+# 导入统一的数据库配置
+try:
+    from config.db_config import DB_PATH as UNIFIED_DB_PATH
+except ImportError:
+    # 备选方案：直接定义路径
+    UNIFIED_DB_PATH = Path(__file__).parent.parent / "db" / "sql_db" / "kbrobot.db"
+
 
 class Settings(BaseSettings):
     """
@@ -19,8 +26,9 @@ class Settings(BaseSettings):
     PROJECT_VERSION: str = "0.1.0"
     PROJECT_ROOT: Path = Path(__file__).parent.parent
 
-    # 数据库配置 - 使用绝对路径确保隔离
-    DATABASE_URL: str = "sqlite:///./db/sql_db/kbrobot.db"
+    # 数据库配置 - 使用统一的数据库路径
+    # DATABASE_URL 中的路径需要转换为 URL 格式
+    DATABASE_URL: str = f"sqlite:///{UNIFIED_DB_PATH}"
     VECTOR_STORE_PATH: str = ""  # 在 __init__ 中动态设置为绝对路径
 
     # LLM 配置（使用 302.ai API - OpenAI 兼容接口）
