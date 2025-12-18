@@ -232,3 +232,94 @@ class DocumentProcessor:
                 results[file_path] = []
 
         return results
+
+    # 【新增】处理对话中上传的临时文件
+    def process_session_file(
+        self,
+        file_path: str,
+        max_length: int = 5000
+    ) -> str:
+        """
+        处理会话中上传的临时文件，返回可用的文本内容
+
+        Args:
+            file_path: 文件路径
+            max_length: 返回内容的最大长度（字符）
+
+        Returns:
+            str: 提取的文件内容（截断后）
+
+        说明：
+            - 用于处理对话中上传的临时文件
+            - 返回的内容用于 LLM 上下文，需要限制长度
+            - 不进行分块，直接返回整个文件内容
+        """
+        try:
+            # 加载文件内容
+            content = self.load_document(file_path)
+
+            # 清洗文本
+            cleaned_content = self.clean_text(content)
+
+            # 截断内容到最大长度
+            if len(cleaned_content) > max_length:
+                cleaned_content = cleaned_content[:max_length] + "\n... [内容已截断]"
+
+            logger.info(f"会话文件处理完成: {len(cleaned_content)} 个字符")
+            return cleaned_content
+
+        except Exception as e:
+            logger.error(f"处理会话文件失败 ({file_path}): {e}")
+            raise
+
+    def preprocess_file_content(
+        self,
+        content: str,
+        file_type: str = "text"
+    ) -> str:
+        """
+        清洗和格式化文件内容，保留上下文关键信息
+
+        Args:
+            content: 文件内容
+            file_type: 文件类型（text, pdf, image 等）
+
+        Returns:
+            str: 处理后的内容
+
+        说明：
+            - 针对不同的文件类型进行格式化
+            - 保留关键信息，去除冗余信息
+            - 用于 LLM 上下文拼接
+        """
+        try:
+            # 根据文件类型进行不同的处理
+            if file_type == "text":
+                # 文本文件：直接清洗
+                return self.clean_text(content)
+
+            elif file_type == "pdf":
+                # PDF：保留页码信息
+                lines = content.split("\n")
+                processed_lines = []
+                for line in lines:
+                    if line.strip():
+                        processed_lines.append(line)
+                return "\n".join(processed_lines)
+
+            elif file_type == "image":
+                # 图片：返回元数据
+                return f"[图像内容：{content}]"
+
+            elif file_type == "csv":
+                # CSV：保留表格结构
+                lines = content.split("\n")
+                return "\n".join(line for line in lines if line.strip())
+
+            else:
+                # 默认处理
+                return self.clean_text(content)
+
+        except Exception as e:
+            logger.error(f"预处理文件内容失败: {e}")
+            return content

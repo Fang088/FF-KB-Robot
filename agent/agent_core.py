@@ -44,6 +44,8 @@ class AgentCore:
         kb_id: str,
         question: str,
         top_k: int = 5,
+        uploaded_files: Optional[List[Dict[str, Any]]] = None,  # 【新增】
+        file_contents: Optional[Dict[str, str]] = None,          # 【新增】
     ) -> AgentState:
         """
         创建初始状态
@@ -52,6 +54,8 @@ class AgentCore:
             kb_id: 知识库 ID
             question: 用户问题
             top_k: 检索结果数量
+            uploaded_files: 【新增】上传的文件列表
+            file_contents: 【新增】提取的文件内容
 
         Returns:
             初始 AgentState
@@ -64,6 +68,13 @@ class AgentCore:
             max_iterations=settings.LANGGRAPH_MAX_ITERATIONS,
         )
         state.add_message("user", question)
+
+        # 【新增】设置上传的文件
+        if uploaded_files:
+            state.uploaded_files = uploaded_files
+        if file_contents:
+            state.file_contents = file_contents
+
         return state
 
     async def execute_query(
@@ -73,6 +84,8 @@ class AgentCore:
         top_k: int = 5,
         use_tools: bool = False,
         use_cache: bool = True,
+        uploaded_files: Optional[List[Dict[str, Any]]] = None,  # 【新增】
+        file_contents: Optional[Dict[str, str]] = None,          # 【新增】
     ) -> Dict[str, Any]:
         """
         执行查询（支持多层缓存和性能追踪）
@@ -83,6 +96,8 @@ class AgentCore:
             top_k: 检索结果数量
             use_tools: 是否使用工具
             use_cache: 是否使用缓存
+            uploaded_files: 【新增】上传的文件列表
+            file_contents: 【新增】提取的文件内容
 
         Returns:
             查询结果
@@ -113,7 +128,13 @@ class AgentCore:
             tracker = PerformanceTracker(query_id)
 
             # 创建初始状态
-            initial_state = self._create_initial_state(kb_id, question, top_k)
+            initial_state = self._create_initial_state(
+                kb_id,
+                question,
+                top_k,
+                uploaded_files=uploaded_files,  # 【新增】
+                file_contents=file_contents      # 【新增】
+            )
             initial_state.query_id = query_id  # 更新 query_id
 
             # 执行 Agent 图

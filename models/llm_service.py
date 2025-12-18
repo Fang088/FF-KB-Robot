@@ -108,9 +108,10 @@ class LLMService:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         on_chunk: Optional[callable] = None,
+        images: Optional[List[Dict[str, Any]]] = None,  # 【新增】支持图片数据
     ):
         """
-        流式生成文本 - 支持回调和性能追踪
+        流式生成文本 - 支持回调和性能追踪 + 多模态vision
 
         Args:
             prompt: 用户提示
@@ -118,6 +119,7 @@ class LLMService:
             temperature: 温度参数（可选，覆盖默认值）
             max_tokens: 最大 token 数（可选，覆盖默认值）
             on_chunk: 回调函数，接收每个文本片段
+            images: 【新增】图片数据列表 [{"format": "PNG", "base64": "..."}, ...]
 
         Yields:
             生成的文本片段
@@ -128,7 +130,28 @@ class LLMService:
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+
+        # 【新增】构建支持vision的消息格式
+        if images and len(images) > 0:
+            # 多模态消息：文本 + 图片
+            content_parts = [{"type": "text", "text": prompt}]
+
+            for img_data in images:
+                # 构建image_url格式
+                img_format = img_data.get("format", "PNG").lower()
+                base64_str = img_data.get("base64", "")
+
+                content_parts.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/{img_format};base64,{base64_str}"
+                    }
+                })
+
+            messages.append({"role": "user", "content": content_parts})
+        else:
+            # 纯文本消息
+            messages.append({"role": "user", "content": prompt})
 
         try:
             stream = self.client.chat.completions.create(

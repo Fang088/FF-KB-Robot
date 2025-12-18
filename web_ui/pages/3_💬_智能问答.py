@@ -23,6 +23,7 @@ st.set_page_config(
 )
 
 import sys
+import logging
 from pathlib import Path
 
 # 添加 web_ui 到路径
@@ -43,6 +44,9 @@ from components.chat_manager import (
     get_conversation_title
 )
 from styles.custom import apply_custom_css
+
+# 初始化日志记录器
+logger = logging.getLogger(__name__)
 
 
 def render_chat_messages(messages, show_confidence=True, show_retrieved_docs=True):
@@ -72,6 +76,19 @@ def render_chat_messages(messages, show_confidence=True, show_retrieved_docs=Tru
             # 用户消息 - 右侧显示
             with st.chat_message("user"):
                 st.markdown(message["content"])
+
+                # 【改进】显示用户消息中的文件信息
+                uploaded_files = message.get("uploaded_files", [])
+                if uploaded_files:
+                    with st.expander(f"📎 附加文件 ({len(uploaded_files)}) ", expanded=False):
+                        for file_info in uploaded_files:
+                            file_size_kb = file_info.get("file_size", 0) / 1024
+                            file_type = file_info.get("file_type", "unknown").upper()
+                            st.caption(
+                                f"📄 **{file_info.get('filename', 'unknown')}** "
+                                f"({file_type}, {file_size_kb:.1f}KB)"
+                            )
+
                 if time_str:
                     st.caption(f"🕐 {time_str}")
         else:
@@ -119,6 +136,15 @@ def main():
     """主函数"""
     # 应用自定义样式
     apply_custom_css()
+
+    # 基础样式：给底部留出空间，避免内容被输入框遮挡
+    st.markdown("""
+        <style>
+        .main .block-container {
+            padding-bottom: 120px !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
 
     # 初始化查询服务和知识库服务
     query_service = QueryService()
@@ -269,29 +295,90 @@ def main():
         else:
             st.info("🎉 对话已创建！开始提问吧")
 
-    st.markdown("---")
+    # ========================================
+    # 使用 chat_input 内置的文件上传功能
+    # ========================================
 
-    # 输入框
-    question = st.chat_input(
-        placeholder="输入您的问题，按回车发送...",
-        key="question_input"
+    # 渲染聊天输入框（支持文件上传）
+    user_input = st.chat_input(
+        placeholder="💬 输入您的问题，按回车发送（可点击📎上传附件）...",
+        key=f"chat_input_{current_conv_id}",
+        accept_file=True
     )
 
-    # 【新流程】第一步：用户输入问题 → 立即显示问题并标记待处理查询
-    if question and question.strip():
-        # 添加用户消息到历史
-        add_message(current_conv_id, "user", question.strip())
+    # ========================================
+    # 处理用户输入和文件上传
+    # ========================================
 
-        # 标记待处理查询（在 session_state 中）
-        st.session_state.pending_query = {
-            "kb_id": conv_kb_id,
-            "question": question.strip(),
-            "top_k": top_k,
-            "use_cache": use_cache
-        }
+    if user_input:
+        # chat_input 返回字典：{"text": str, "files": List[UploadedFile]}
+        question_text = user_input.get("text", "").strip()
+        uploaded_files = user_input.get("files", [])
 
-        # 立即重新运行以显示用户消息
-        st.rerun()
+        if question_text:
+            # 处理上传的文件
+            processed_files = []
+            if uploaded_files:
+                try:
+                    from web_ui.services.conversation_file_manager import ConversationFileManager
+                    from config.settings import settings
+                    from utils.file_utils import is_supported_format
+                    import time
+
+                    file_manager = ConversationFileManager(settings.TEMP_UPLOAD_PATH)
+                    MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+
+                    for uploaded_file in uploaded_files:
+                        try:
+                            filename = uploaded_file.name
+                            file_content = uploaded_file.read()
+                            file_size = len(file_content)
+
+                            # 检查文件大小
+                            if file_size > MAX_FILE_SIZE:
+                                st.warning(f"⚠️ 文件 {filename} 过大 ({file_size / (1024 * 1024):.1f}MB > 50MB)，已跳过")
+                                continue
+
+                            # 检查文件格式
+                            if not is_supported_format(filename, "all"):
+                                st.warning(f"⚠️ 文件 {filename} 格式不支持，已跳过")
+                                continue
+
+                            # 保存文件
+                            file_info = file_manager.save_uploaded_file(
+                                current_conv_id,
+                                file_content,
+                                filename
+                            )
+                            processed_files.append(file_info.to_dict())
+                            logger.info(f"成功处理附件: {filename}")
+
+                        except Exception as e:
+                            logger.error(f"处理附件 {uploaded_file.name} 失败: {e}")
+                            st.warning(f"⚠️ 处理文件 {uploaded_file.name} 失败")
+
+                except Exception as e:
+                    logger.error(f"文件处理失败: {e}")
+                    st.error(f"❌ 文件处理失败: {str(e)}")
+
+            # 添加用户消息
+            add_message(
+                current_conv_id,
+                "user",
+                question_text,
+                uploaded_files=processed_files
+            )
+
+            # 设置待处理查询
+            st.session_state.pending_query = {
+                "kb_id": conv_kb_id,
+                "question": question_text,
+                "top_k": top_k,
+                "use_cache": use_cache,
+                "uploaded_files": processed_files
+            }
+
+            st.rerun()
 
     # 【新流程】第二步：处理待处理的查询（显示答案）
     if st.session_state.get("pending_query"):
@@ -303,7 +390,8 @@ def main():
                 kb_id=query_info["kb_id"],
                 question=query_info["question"],
                 top_k=query_info["top_k"],
-                use_cache=query_info["use_cache"]
+                use_cache=query_info["use_cache"],
+                uploaded_files=query_info.get("uploaded_files", [])  # 【新增】传递上传的文件
             )
 
         # 处理查询结果

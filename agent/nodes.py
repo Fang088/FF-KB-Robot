@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 
 async def retrieve_documents(state: AgentState) -> Dict[str, Any]:
     """
-    文档检索节点 - 已集成性能埋点
-    从知识库中检索与问题相关的文档
+    文档检索节点 - 已集成性能埋点 + 文件内容融合
+    从知识库中检索与问题相关的文档，并融合上传文件的内容
 
     Args:
         state: 当前 Agent 状态
@@ -28,6 +28,7 @@ async def retrieve_documents(state: AgentState) -> Dict[str, Any]:
     try:
         # 调用 KnowledgeBaseManager 进行检索
         from retrieval.knowledge_base_manager import KnowledgeBaseManager
+        from config.settings import settings
 
         kb_manager = KnowledgeBaseManager()
 
@@ -42,6 +43,53 @@ async def retrieve_documents(state: AgentState) -> Dict[str, Any]:
         search_elapsed = (time.time() - search_start) * 1000
 
         logger.info(f"[{state.query_id}] 向量库返回 {len(retrieved_docs)} 个文档 ({search_elapsed:.2f}ms)")
+
+        # 【新增】如果有上传的文件，融合文件内容到检索结果
+        if state.file_contents:
+            try:
+                logger.info(f"[{state.query_id}] 【新增】融合 {len(state.file_contents)} 个文件内容到检索结果")
+
+                # 从文件内容中创建虚拟文档
+                file_docs = []
+                for filename, content in state.file_contents.items():
+                    if content.strip():  # 只处理有实际内容的文件
+                        # 构建文件文档
+                        file_doc = {
+                            'id': f"file_{filename}",
+                            'content': content,
+                            'score': 0.9,  # 文件内容给予高权重
+                            'metadata': {
+                                'source': 'uploaded_file',
+                                'filename': filename,
+                                'type': 'file_content'
+                            }
+                        }
+                        file_docs.append(file_doc)
+
+                # 【新增】融合策略：文件内容 + 知识库内容
+                # 优先级：文件内容 > 知识库内容
+                all_docs = file_docs + retrieved_docs
+
+                # 【新增】按相关性重排序（文件内容已有较高分数）
+                # 应用权重倍数
+                for doc in all_docs:
+                    if doc.get('metadata', {}).get('source') == 'uploaded_file':
+                        # 文件内容加权
+                        doc['score'] = doc.get('score', 0.9) * settings.FILE_CONTENT_CONTEXT_WEIGHT
+                    else:
+                        # 知识库内容基础权重
+                        doc['score'] = doc.get('score', 0) * settings.KNOWLEDGE_BASE_CONTEXT_WEIGHT
+
+                # 按分数排序（高到低）
+                all_docs.sort(key=lambda x: x.get('score', 0), reverse=True)
+
+                # 截断到 top_k
+                retrieved_docs = all_docs[:5]
+
+                logger.info(f"[{state.query_id}] 【新增】融合后共 {len(retrieved_docs)} 个文档（包含文件内容）")
+
+            except Exception as e:
+                logger.warning(f"[{state.query_id}] 融合文件内容失败: {e}，继续使用知识库检索结果")
 
         # 转换为 RetrievedDoc 对象
         retrieved_docs = [
@@ -71,8 +119,9 @@ async def retrieve_documents(state: AgentState) -> Dict[str, Any]:
 
 async def generate_response(state: AgentState) -> Dict[str, Any]:
     """
-    响应生成节点 - 已集成性能埋点和流式输出
+    响应生成节点 - 已集成性能埋点和流式输出 + 多模态vision支持
     基于检索到的文档和用户问题生成答案
+    【新增】支持图片分析（如果上传了图片文件）
 
     Args:
         state: 当前 Agent 状态
@@ -92,6 +141,30 @@ async def generate_response(state: AgentState) -> Dict[str, Any]:
             ConfidenceCalculator,
             classify_question,
         )
+        import json
+        import re
+
+        # 【新增】提取图片数据（如果存在）
+        images_data = []
+        if state.file_contents:
+            for filename, content in state.file_contents.items():
+                # 检测是否为图片数据（带特殊标记）
+                if content.startswith("__IMAGE_DATA__") and content.endswith("__IMAGE_DATA_END__"):
+                    try:
+                        # 提取JSON数据
+                        json_str = content.replace("__IMAGE_DATA__", "").replace("__IMAGE_DATA_END__", "")
+                        image_info = json.loads(json_str)
+
+                        # 添加到图片列表
+                        images_data.append({
+                            "format": image_info.get("format", "PNG"),
+                            "base64": image_info.get("base64", ""),
+                            "filename": filename
+                        })
+
+                        logger.info(f"[{state.query_id}] 检测到图片文件: {filename}, 格式: {image_info.get('format')}")
+                    except Exception as e:
+                        logger.warning(f"解析图片数据失败 ({filename}): {e}")
 
         # 步骤1：问题分类（快速）
         classify_start = time.time()
@@ -103,9 +176,14 @@ async def generate_response(state: AgentState) -> Dict[str, Any]:
         docs_dict = []
         for doc in state.retrieved_docs:
             if hasattr(doc, 'to_dict'):
-                docs_dict.append(doc.to_dict())
+                doc_dict = doc.to_dict()
             else:
-                docs_dict.append(doc)
+                doc_dict = doc
+
+            # 【新增】过滤掉图片数据文档（避免base64干扰Prompt）
+            content = doc_dict.get('content', '')
+            if not (content.startswith("__IMAGE_DATA__") and content.endswith("__IMAGE_DATA_END__")):
+                docs_dict.append(doc_dict)
 
         prompt_start = time.time()
         prompts = PromptTemplate.format_rag_prompt(
@@ -113,18 +191,25 @@ async def generate_response(state: AgentState) -> Dict[str, Any]:
             documents=docs_dict,
             question_type=question_type,
         )
+
+        # 【新增】如果有图片，在Prompt中添加提示
+        if images_data:
+            prompts['user'] += f"\n\n【附加信息】用户上传了 {len(images_data)} 张图片，请结合图片内容回答问题。"
+
         prompt_elapsed = (time.time() - prompt_start) * 1000
         logger.debug(f"[{state.query_id}] 提示词生成完成 ({prompt_elapsed:.2f}ms), 长度: {len(prompts['user'])} 字符")
 
-        # 步骤3：调用 LLM 生成答案（流式）
+        # 步骤3：调用 LLM 生成答案（流式 + vision支持）
         llm = LLMService()
         answer_chunks = []
 
         llm_start = time.time()
 
+        # 【新增】传递图片数据（如果存在）
         for chunk in llm.generate_text_stream(
             prompt=prompts['user'],
             system_prompt=prompts['system'],
+            images=images_data if images_data else None  # 传递图片
         ):
             answer_chunks.append(chunk)
 
@@ -138,6 +223,8 @@ async def generate_response(state: AgentState) -> Dict[str, Any]:
         llm_elapsed = (time.time() - llm_start) * 1000
 
         logger.info(f"[{state.query_id}] LLM 生成完成 ({llm_elapsed:.2f}ms): {len(state.answer)} 字符")
+        if images_data:
+            logger.info(f"[{state.query_id}] ✅ 使用了多模态vision分析 {len(images_data)} 张图片")
 
         # 步骤4：计算多维度置信度
         confidence_start = time.time()

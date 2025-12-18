@@ -2,7 +2,7 @@
 FF-KB-Robot 数据清理脚本 - 全面清除所有数据和缓存
 
 功能：
-1. 清除 SQLite 数据库中的所有知识库、文档、分块数据
+1. 清除 SQLite 数据库中的所有知识库、文档、分块、对话、消息、文件引用数据
 2. 清除向量数据库（HNSW 索引和元数据）
 3. 清除运行时缓存（Embedding、查询结果、分类器缓存）
 4. 清除临时上传文件和处理后的分块
@@ -103,10 +103,10 @@ class CleanupStats:
 
 # ==================== 清理函数 ====================
 
-def show_database_stats(db_path: Path) -> Tuple[int, int, int]:
+def show_database_stats(db_path: Path) -> Tuple[int, int, int, int, int, int, int]:
     """显示数据库统计信息"""
     if not db_path.exists():
-        return 0, 0, 0
+        return 0, 0, 0, 0, 0, 0, 0
 
     try:
         conn = sqlite3.connect(db_path)
@@ -121,11 +121,24 @@ def show_database_stats(db_path: Path) -> Tuple[int, int, int]:
         cursor.execute("SELECT COUNT(*) FROM text_chunks")
         chunk_count = cursor.fetchone()[0]
 
+        # 对话相关表的统计
+        cursor.execute("SELECT COUNT(*) FROM conversations")
+        conv_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM conversation_messages")
+        msg_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM conversation_file_refs")
+        file_refs_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM session_temporary_files")
+        temp_files_count = cursor.fetchone()[0]
+
         conn.close()
-        return kb_count, doc_count, chunk_count
+        return kb_count, doc_count, chunk_count, conv_count, msg_count, file_refs_count, temp_files_count
 
     except sqlite3.Error:
-        return 0, 0, 0
+        return 0, 0, 0, 0, 0, 0, 0
 
 
 def backup_database(db_path: Path) -> Optional[Path]:
@@ -150,7 +163,7 @@ def backup_database(db_path: Path) -> Optional[Path]:
 
 
 def clear_database(db_path: Path, stats: CleanupStats) -> bool:
-    """清除 SQLite 数据库中的所有知识库、文档、分块数据"""
+    """清除 SQLite 数据库中的所有数据（知识库、文档、分块、对话等）"""
     if not db_path.exists():
         logger.warning(f"数据库文件不存在，跳过清理: {db_path}")
         return True
@@ -169,7 +182,26 @@ def clear_database(db_path: Path, stats: CleanupStats) -> bool:
         cursor.execute("SELECT COUNT(*) FROM text_chunks")
         chunk_count = cursor.fetchone()[0]
 
-        # 清除数据（保留表结构）
+        cursor.execute("SELECT COUNT(*) FROM conversations")
+        conv_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM conversation_messages")
+        msg_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM conversation_file_refs")
+        file_refs_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM session_temporary_files")
+        temp_files_count = cursor.fetchone()[0]
+
+        # 清除数据（保留表结构）- 注意外键约束，按顺序删除
+        # 先删除对话相关数据（外键依赖）
+        cursor.execute("DELETE FROM conversation_file_refs")
+        cursor.execute("DELETE FROM session_temporary_files")
+        cursor.execute("DELETE FROM conversation_messages")
+        cursor.execute("DELETE FROM conversations")
+
+        # 再删除知识库相关数据
         cursor.execute("DELETE FROM text_chunks")
         cursor.execute("DELETE FROM documents")
         cursor.execute("DELETE FROM knowledge_bases")
@@ -177,7 +209,16 @@ def clear_database(db_path: Path, stats: CleanupStats) -> bool:
         conn.commit()
         conn.close()
 
-        logger.info(f"✓ 已清除数据库: {kb_count} 个知识库、{doc_count} 个文档、{chunk_count} 个分块")
+        logger.info(
+            f"✓ 已清除数据库: "
+            f"{kb_count} 个知识库、"
+            f"{doc_count} 个文档、"
+            f"{chunk_count} 个分块、"
+            f"{conv_count} 个对话、"
+            f"{msg_count} 条消息、"
+            f"{file_refs_count} 个文件引用、"
+            f"{temp_files_count} 个临时文件"
+        )
         return True
 
     except sqlite3.Error as e:
@@ -389,12 +430,16 @@ def main():
 
     # 显示当前数据库统计
     if SQL_DB_FILE.exists():
-        kb_count, doc_count, chunk_count = show_database_stats(SQL_DB_FILE)
-        if kb_count > 0 or doc_count > 0 or chunk_count > 0:
+        kb_count, doc_count, chunk_count, conv_count, msg_count, file_refs_count, temp_files_count = show_database_stats(SQL_DB_FILE)
+        if kb_count > 0 or doc_count > 0 or chunk_count > 0 or conv_count > 0 or msg_count > 0 or file_refs_count > 0 or temp_files_count > 0:
             print("📊 当前数据库状态:")
             print(f"  • 知识库: {kb_count} 个")
             print(f"  • 文档: {doc_count} 个")
             print(f"  • 分块: {chunk_count} 个")
+            print(f"  • 对话: {conv_count} 个")
+            print(f"  • 消息: {msg_count} 条")
+            print(f"  • 文件引用: {file_refs_count} 个")
+            print(f"  • 临时文件: {temp_files_count} 个")
             print()
 
     # 显示清理项目
@@ -407,7 +452,7 @@ def main():
         print()
     else:
         print("📋 清理项目:")
-        print("  1. SQLite 数据库（知识库、文档、分块）")
+        print("  1. SQLite 数据库（知识库、文档、分块、对话、消息、文件引用）")
         print("  2. 向量存储（HNSW 索引和元数据）")
         print("  3. 临时上传文件")
         print("  4. 处理后的分块")

@@ -68,7 +68,8 @@ class QueryService:
         kb_id: str,
         question: str,
         top_k: int = 5,
-        use_cache: bool = True
+        use_cache: bool = True,
+        uploaded_files: Optional[List[Dict[str, Any]]] = None  # 【新增】支持上传文件
     ) -> Dict[str, Any]:
         """
         执行查询（异步）
@@ -78,6 +79,7 @@ class QueryService:
             question: 用户问题
             top_k: 返回的文档数量
             use_cache: 是否使用缓存
+            uploaded_files: 【新增】上传的文件列表
 
         Returns:
             Dict: {
@@ -100,12 +102,33 @@ class QueryService:
             import time
             start_time = time.time()
 
+            # 【新增】如果有上传的文件，提取其内容
+            file_contents_dict = {}
+            if uploaded_files:
+                try:
+                    from web_ui.services.conversation_file_manager import ConversationFileManager
+                    from config.settings import settings
+                    file_manager = ConversationFileManager(settings.TEMP_UPLOAD_PATH)
+
+                    for file_info in uploaded_files:
+                        try:
+                            file_path = file_info.get("file_path")
+                            if file_path:
+                                content = file_manager.extract_file_content(file_path)
+                                file_contents_dict[file_info.get("filename", "unknown")] = content
+                        except Exception as e:
+                            logger.warning(f"提取文件内容失败: {e}")
+                except Exception as e:
+                    logger.warning(f"初始化文件管理器失败: {e}")
+
             # 调用 Agent 核心执行查询
             result = await self.agent_core.execute_query(
                 kb_id=kb_id,
                 question=question,
                 top_k=top_k,
-                use_cache=use_cache
+                use_cache=use_cache,
+                uploaded_files=uploaded_files or [],  # 【新增】传递文件列表
+                file_contents=file_contents_dict      # 【新增】传递提取的文件内容
             )
 
             response_time = int((time.time() - start_time) * 1000)
@@ -134,6 +157,7 @@ class QueryService:
                 "retrieved_docs": retrieved_docs,
                 "response_time_ms": response_time,
                 "from_cache": result.get("from_cache", False),
+                "uploaded_files": uploaded_files or [],  # 【新增】保存上传的文件信息
                 "metadata": {
                     "kb_id": kb_id,
                     "top_k": top_k,
@@ -163,7 +187,8 @@ class QueryService:
         kb_id: str,
         question: str,
         top_k: int = 5,
-        use_cache: bool = True
+        use_cache: bool = True,
+        uploaded_files: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """
         执行查询（同步封装）
@@ -176,6 +201,7 @@ class QueryService:
             question: 用户问题
             top_k: 返回的文档数量
             use_cache: 是否使用缓存
+            uploaded_files: 上传的文件列表
 
         Returns:
             同 execute_query_async
@@ -191,13 +217,13 @@ class QueryService:
                 loop = asyncio.get_running_loop()
                 # 如果有运行中的循环，使用 run_until_complete
                 return loop.run_until_complete(
-                    self.execute_query_async(kb_id, question, top_k, use_cache)
+                    self.execute_query_async(kb_id, question, top_k, use_cache, uploaded_files)
                 )
             except RuntimeError:
                 # 如果没有运行中的事件循环（Streamlit ScriptRunner 线程）
                 # 创建新的事件循环并运行
                 return asyncio.run(
-                    self.execute_query_async(kb_id, question, top_k, use_cache)
+                    self.execute_query_async(kb_id, question, top_k, use_cache, uploaded_files)
                 )
 
         except Exception as e:

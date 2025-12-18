@@ -144,24 +144,67 @@ class DBConnection:
                         error BOOLEAN,
                         retrieved_docs TEXT,
                         metadata TEXT,
+                        uploaded_files TEXT,           -- 【新增】JSON格式的上传文件列表
+                        file_metadata TEXT,            -- 【新增】JSON格式的文件元数据
                         FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                     )
                 """)
 
-                # 为对话表和消息表创建索引
+                # 【新增】对话文件引用表 - 存储对话中上传文件的元数据
                 cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_conversations_kb_id ON conversations(kb_id)
+                    CREATE TABLE IF NOT EXISTS conversation_file_refs (
+                        id TEXT PRIMARY KEY,
+                        message_id TEXT NOT NULL,
+                        conversation_id TEXT NOT NULL,
+                        filename TEXT NOT NULL,
+                        file_hash TEXT UNIQUE,
+                        file_size INTEGER,
+                        file_type TEXT,
+                        content_preview TEXT,
+                        created_at TIMESTAMP,
+                        expires_at TIMESTAMP,
+                        FOREIGN KEY(message_id) REFERENCES conversation_messages(id),
+                        FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                    )
+                """)
+
+                # 【新增】会话临时文件表 - 管理对话中的临时上传文件
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS session_temporary_files (
+                        id TEXT PRIMARY KEY,
+                        conversation_id TEXT NOT NULL,
+                        file_hash TEXT UNIQUE,
+                        filename TEXT NOT NULL,
+                        file_path TEXT,
+                        file_size INTEGER,
+                        created_at TIMESTAMP,
+                        expires_at TIMESTAMP,
+                        status TEXT DEFAULT 'active',
+                        FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                    )
+                """)
+
+                # 【新增】为新表创建索引
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_conv_files_conv_id
+                    ON conversation_file_refs(conversation_id)
                 """)
 
                 cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation_id
-                    ON conversation_messages(conversation_id)
+                    CREATE INDEX IF NOT EXISTS idx_conv_files_expires
+                    ON conversation_file_refs(expires_at)
                 """)
 
                 cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_conversation_messages_timestamp
-                    ON conversation_messages(timestamp)
+                    CREATE INDEX IF NOT EXISTS idx_session_files_conv_id
+                    ON session_temporary_files(conversation_id)
                 """)
+
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_session_files_expires
+                    ON session_temporary_files(expires_at)
+                """)
+
 
                 conn.commit()
             except sqlite3.Error as e:

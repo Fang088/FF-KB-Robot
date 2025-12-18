@@ -77,6 +77,25 @@ class Settings(BaseSettings):
     TEMP_UPLOAD_PATH: str = ""  # 在 __init__ 中动态设置为绝对路径
     PROCESSED_CHUNKS_PATH: str = ""  # 在 __init__ 中动态设置为绝对路径
 
+    # ==================== 对话中文件上传配置 ====================
+    # 单个文件大小限制
+    MAX_FILE_SIZE_MB: int = 100  # 单个文件最大 100MB
+    # 每个会话最多上传的文件数
+    MAX_SESSION_FILES: int = 10  # 单个会话最多 10 个文件
+    # 临时文件存储大小限制
+    MAX_TEMP_STORAGE_MB: int = 5000  # 临时目录最大 5GB
+    # 临时文件保留时间
+    TEMP_FILE_TTL_HOURS: int = 24  # 临时文件保留 24 小时
+    # 文件哈希算法
+    FILE_HASH_ALGORITHM: str = "sha256"  # 用于文件去重
+    # 文件内容提取限制
+    MAX_FILE_CONTENT_LENGTH: int = 5000  # 文本文件内容最多 5000 字符
+    MAX_PDF_PAGES: int = 3  # PDF 最多提取 3 页
+    EXTRACT_IMAGE_METADATA_ONLY: bool = True  # 图片仅保存元数据，不提取内容
+    # RAG 优化参数
+    FILE_CONTENT_CONTEXT_WEIGHT: float = 1.5  # 文件内容权重倍数（相对于知识库）
+    KNOWLEDGE_BASE_CONTEXT_WEIGHT: float = 1.0  # 知识库内容基础权重
+
     # ==================== 检索优化配置 ====================
     # 相似度过滤阈值（< 此值的结果会被过滤）
     # HNSW使用L2距离度量：

@@ -32,11 +32,20 @@ class Message:
     content: str
     timestamp: datetime = field(default_factory=datetime.now)
 
+    # 【新增】文件相关字段 - 支持在对话中上传文件
+    uploaded_files: List[Dict[str, Any]] = field(default_factory=list)
+    # 格式: [{"file_id": str, "filename": str, "file_type": str, "file_size": int}, ...]
+
+    file_metadata: Dict[str, Any] = field(default_factory=dict)
+    # 格式: {"total_files": int, "total_size_bytes": int, "extraction_status": str, ...}
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "role": self.role,
             "content": self.content,
             "timestamp": self.timestamp.isoformat(),
+            "uploaded_files": self.uploaded_files,  # 【新增】
+            "file_metadata": self.file_metadata,    # 【新增】
         }
 
 
@@ -83,6 +92,16 @@ class AgentState:
     current_node: str = "start"
     iteration: int = 0
     max_iterations: int = 10
+
+    # 【新增】文件相关字段 - 支持对话中上传的文件处理
+    uploaded_files: List[Dict[str, Any]] = field(default_factory=list)
+    # 格式: [{"file_id": str, "filename": str, "file_type": str, ...}, ...]
+
+    file_contents: Dict[str, str] = field(default_factory=dict)
+    # 格式: {filename: extracted_content, ...} - 已提取的文件内容缓存
+
+    file_processing_status: Dict[str, str] = field(default_factory=dict)
+    # 格式: {filename: "pending"|"success"|"failed", ...} - 文件处理状态
 
     def add_message(self, role: str, content: str):
         """添加消息到历史"""
@@ -144,6 +163,9 @@ class AgentState:
             "current_node": self.current_node,
             "iteration": self.iteration,
             "metadata": self.metadata,
+            "uploaded_files": self.uploaded_files,          # 【新增】
+            "file_contents": self.file_contents,           # 【新增】
+            "file_processing_status": self.file_processing_status,  # 【新增】
         }
 
     def get_context_for_generation(self) -> str:
