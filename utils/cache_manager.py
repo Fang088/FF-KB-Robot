@@ -256,7 +256,9 @@ class QueryResultCache(BaseCache):
 
     def __init__(self, max_size: int = 5000, ttl: int = 3600):
         super().__init__(max_size, ttl, CacheLevel.QUERY_RESULT)
-        self.semantic_keys: Dict[str, str] = {}  # 规范化后的语义键映射
+        # 优化：使用倒排索引，语义键 -> 精确键的直接映射
+        # 这样查找从 O(n²) 优化为 O(1)
+        self.semantic_index: Dict[str, str] = {}  # 语义键 -> 精确缓存键的倒排索引
 
     def get_key(self, kb_id: str, question: str) -> str:
         """生成缓存键"""
@@ -269,7 +271,13 @@ class QueryResultCache(BaseCache):
         return f"{kb_id}:{semantic_hash}"
 
     def get_result(self, kb_id: str, question: str) -> Optional[Dict[str, Any]]:
-        """获取查询结果（支持语义匹配）"""
+        """
+        获取查询结果（支持语义匹配）
+
+        优化说明：
+        - 使用倒排索引实现 O(1) 语义匹配查找
+        - 避免了原来的 O(n²) 双重循环
+        """
         # 步骤 1: 尝试精确匹配
         exact_key = self.get_key(kb_id, question)
         result = self.get(exact_key)
@@ -277,38 +285,49 @@ class QueryResultCache(BaseCache):
             logger.debug(f"精确缓存命中: {exact_key[:16]}...")
             return result
 
-        # 步骤 2: 尝试语义匹配
+        # 步骤 2: 尝试语义匹配（优化为 O(1) 查找）
         semantic_key = self.get_semantic_key(kb_id, question)
 
-        # 在所有已缓存的语义键中查找匹配
-        for cached_key, cached_value in list(self.cache.items()):
-            # 尝试从已有的语义键映射中找到匹配
-            for cached_semantic_key, stored_key in self.semantic_keys.items():
-                if cached_semantic_key == semantic_key and stored_key in self.cache:
-                    entry = self.cache[stored_key]
-                    if not entry.is_expired():
-                        entry.update_hit()
-                        self.stats.cache_hits += 1
-                        self.cache.move_to_end(stored_key)
-                        logger.debug(f"语义缓存命中: {semantic_key[:16]}...")
-                        return entry.value
-                    else:
-                        del self.cache[stored_key]
+        # 直接从倒排索引中查找，O(1) 复杂度
+        if semantic_key in self.semantic_index:
+            stored_key = self.semantic_index[semantic_key]
+
+            # 检查缓存是否仍然有效
+            if stored_key in self.cache:
+                entry = self.cache[stored_key]
+                if not entry.is_expired():
+                    entry.update_hit()
+                    self.stats.cache_hits += 1
+                    self.cache.move_to_end(stored_key)
+                    logger.debug(f"语义缓存命中: {semantic_key[:16]}...")
+                    return entry.value
+                else:
+                    # 过期则清理
+                    del self.cache[stored_key]
+                    del self.semantic_index[semantic_key]
+            else:
+                # 索引不一致，清理
+                del self.semantic_index[semantic_key]
 
         self.stats.cache_misses += 1
         return None
 
     def set_result(self, kb_id: str, question: str, result: Dict[str, Any]) -> None:
-        """设置查询结果"""
+        """
+        设置查询结果
+
+        优化说明：
+        - 同时更新倒排索引，保持语义���到精确键的映射
+        """
         exact_key = self.get_key(kb_id, question)
         semantic_key = self.get_semantic_key(kb_id, question)
 
         # 保存到基础缓存
         self.set(exact_key, result)
 
-        # 记录语义键映射
-        self.semantic_keys[semantic_key] = exact_key
-        logger.debug(f"缓存已设置: semantic_key={semantic_key[:16]}...")
+        # 更新倒排索引：语义键 -> 精确键
+        self.semantic_index[semantic_key] = exact_key
+        logger.debug(f"缓存已设置: semantic_key={semantic_key[:16]}... -> exact_key={exact_key[:16]}...")
 
     def clear_kb(self, kb_id: str) -> int:
         """清空知识库的缓存"""
@@ -320,14 +339,34 @@ class QueryResultCache(BaseCache):
             ]
             for key in keys_to_delete:
                 del self.cache[key]
-                # 清理语义键映射
-                for sem_key, stored_key in list(self.semantic_keys.items()):
+                # 清理倒排索引
+                for sem_key, stored_key in list(self.semantic_index.items()):
                     if stored_key == key:
-                        del self.semantic_keys[sem_key]
+                        del self.semantic_index[sem_key]
 
             self.stats.current_size = len(self.cache)
             logger.info(f"已清空 KB {kb_id} 的查询缓存 ({len(keys_to_delete)} 条目)")
             return len(keys_to_delete)
+
+    def clear(self) -> None:
+        """清空所有缓存（重写以同时清理倒排索引）"""
+        with self.lock:
+            size = len(self.cache)
+            self.cache.clear()
+            self.semantic_index.clear()  # 清理倒排索引
+            self.stats.current_size = 0
+            logger.info(f"已清空 {self.level.value} 缓存 ({size} 条目)")
+
+    def _clean_expired(self) -> None:
+        """清理已过期的条目（重写以同时清理倒排索引）"""
+        with self.lock:
+            expired_keys = [key for key, entry in self.cache.items() if entry.is_expired()]
+            for key in expired_keys:
+                del self.cache[key]
+                # 清理对应的倒排索引
+                for sem_key, stored_key in list(self.semantic_index.items()):
+                    if stored_key == key:
+                        del self.semantic_index[sem_key]
 
 
 class RetrievalClassifierCache(BaseCache):
